@@ -1,0 +1,308 @@
+import { useEffect, useState, useRef } from 'react'
+import { useParams } from 'react-router-dom'
+import { useGame } from '../context/GameContext'
+
+const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Your role is to create an immersive, dynamic, and engaging adventure.
+
+RULES:
+- Narrate vividly. Describe scenes with atmosphere, tension, and detail.
+- React to EVERYTHING the player does.
+- When combat occurs, roll dice explicitly: "Rolling d20... [result]!" and describe outcomes dramatically.
+- Keep responses to 3-5 paragraphs max.
+- End with a clear prompt or 2-3 suggested actions in *italics*.
+- Track player HP. If they take damage, tell them.
+
+When HP or gold changes, include at the END of your response:
+<state_update>
+{"hp": NEW_HP, "gold": NEW_GOLD}
+</state_update>`
+
+function parseStateUpdate(text) {
+  const match = text.match(/<state_update>([\s\S]*?)<\/state_update>/)
+  if (!match) return null
+  try { return JSON.parse(match[1].trim()) } catch { return null }
+}
+
+function cleanText(text) {
+  return text.replace(/<state_update>[\s\S]*?<\/state_update>/g, '').trim()
+}
+
+export default function Game() {
+  const { campaignId } = useParams()
+  const { player, gameState, updateGameState, messages, addMessage } = useGame()
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [showInventory, setShowInventory] = useState(false)
+  const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
+  const hasStarted = useRef(false)
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    if (player && messages.length === 0 && !hasStarted.current) {
+      hasStarted.current = true
+      startAdventure()
+    }
+  }, [player])
+
+  async function callDM(userMessage) {
+    const history = messages.map(m => ({
+      role: m.role === 'dm' ? 'assistant' : 'user',
+      content: m.text
+    }))
+
+    if (userMessage) {
+      history.push({ role: 'user', content: userMessage })
+    }
+
+    if (history.length === 0) {
+      history.push({ role: 'user', content: `Start my adventure as ${player?.name} the ${player?.class}` })
+    }
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: SYSTEM_PROMPT + `\n\nPlayer: ${player?.name}, Class: ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}, Level: ${gameState.level}`
+          },
+          ...history
+        ],
+        max_tokens: 1000
+      })
+    })
+
+    const data = await response.json()
+console.log('Groq response:', JSON.stringify(data))
+return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
+  }
+
+  async function startAdventure() {
+    if (!player) return
+    setLoading(true)
+    let attempts = 0
+    while (attempts < 3) {
+      try {
+        const raw = await callDM(null)
+        const stateUpdate = parseStateUpdate(raw)
+        if (stateUpdate) updateGameState(stateUpdate)
+        addMessage({ role: 'dm', text: cleanText(raw) })
+        break
+      } catch (e) {
+        attempts++
+        if (attempts < 3) {
+          await new Promise(r => setTimeout(r, 5000))
+        } else {
+          addMessage({ role: 'dm', text: 'The ancient magic stirs... try sending a message to begin your adventure.' })
+        }
+      }
+    }
+    setLoading(false)
+  }
+
+  async function sendMessage() {
+    if (!input.trim() || loading) return
+    const userMsg = input.trim()
+    setInput('')
+    addMessage({ role: 'player', text: userMsg })
+    setLoading(true)
+    try {
+      const raw = await callDM(userMsg)
+      const stateUpdate = parseStateUpdate(raw)
+      if (stateUpdate) updateGameState(stateUpdate)
+      addMessage({ role: 'dm', text: cleanText(raw) })
+    } catch {
+      addMessage({ role: 'dm', text: 'The magic falters...' })
+    }
+    setLoading(false)
+  }
+
+  function quickAction(text) {
+    setInput(text)
+    setTimeout(() => sendMessage(), 100)
+  }
+
+  const hpPct = Math.max(0, (gameState.hp / gameState.maxHp) * 100)
+  const hpColor = hpPct > 50 ? '#27ae60' : hpPct > 25 ? '#f39c12' : '#c0392b'
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+
+      {/* Header */}
+      <div style={{
+        padding: '10px 16px',
+        background: 'rgba(10,8,18,0.95)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0
+      }}>
+        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', letterSpacing: '2px' }}>
+          LORECRAFT
+        </div>
+        <button onClick={() => setShowInventory(true)} style={{
+          background: 'none', border: '1px solid var(--border)',
+          borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
+        }}>🎒</button>
+      </div>
+
+      {/* Stats */}
+      <div style={{
+        padding: '8px 16px',
+        background: 'var(--bg2)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0
+      }}>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--text-dim)' }}>
+          {player?.name} · {player?.class}
+        </span>
+        <div style={{ flex: 1, height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ width: `${hpPct}%`, height: '100%', background: hpColor, transition: 'width 0.5s' }}/>
+        </div>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--text)' }}>
+          ❤️ {gameState.hp}/{gameState.maxHp}
+        </span>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)' }}>
+          🪙 {gameState.gold}
+        </span>
+      </div>
+
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {messages.map((msg, i) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
+              {msg.role === 'dm' ? 'DUNGEON MASTER' : player?.name?.toUpperCase()}
+            </div>
+            <div style={{
+              maxWidth: '85%',
+              padding: '12px 16px',
+              borderRadius: msg.role === 'dm' ? '0 12px 12px 12px' : '12px 0 12px 12px',
+              background: msg.role === 'dm' ? 'linear-gradient(135deg, #14102a, #1a1535)' : 'linear-gradient(135deg, #0f1a14, #142010)',
+              border: msg.role === 'dm' ? '1px solid var(--border)' : '1px solid rgba(39,174,96,0.2)',
+              borderLeft: msg.role === 'dm' ? '2px solid var(--gold)' : undefined,
+              borderRight: msg.role === 'player' ? '2px solid var(--green)' : undefined,
+              fontSize: '15px',
+              lineHeight: 1.7,
+              color: 'var(--text)',
+              whiteSpace: 'pre-wrap'
+            }}>
+              {msg.text}
+            </div>
+          </div>
+        ))}
+
+        {loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>DUNGEON MASTER</div>
+            <div style={{
+              padding: '14px 16px',
+              background: 'linear-gradient(135deg, #14102a, #1a1535)',
+              border: '1px solid var(--border)',
+              borderLeft: '2px solid var(--gold)',
+              borderRadius: '0 12px 12px 12px',
+              display: 'flex', gap: '4px'
+            }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{
+                  width: '6px', height: '6px', background: 'var(--gold)', borderRadius: '50%',
+                  animation: 'bounce 1.2s ease-in-out infinite',
+                  animationDelay: `${i * 0.2}s`
+                }}/>
+              ))}
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef}/>
+      </div>
+
+      {/* Quick Actions */}
+      <div style={{ display: 'flex', gap: '6px', padding: '0 12px 8px', overflowX: 'auto', flexShrink: 0 }}>
+        {['👁 Look Around', '⚔️ Attack', '🌑 Sneak', '🔍 Search', '💬 Talk', '💨 Flee'].map(action => (
+          <button key={action} onClick={() => quickAction(action.split(' ').slice(1).join(' '))}
+            style={{
+              background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '16px',
+              padding: '6px 14px', color: 'var(--text-dim)', fontSize: '11px',
+              letterSpacing: '1px', whiteSpace: 'nowrap', flexShrink: 0,
+              fontFamily: "'Cinzel', serif"
+            }}>
+            {action}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <div style={{
+        padding: '10px 12px 16px',
+        background: 'rgba(10,8,18,0.98)',
+        borderTop: '1px solid var(--border)',
+        display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0
+      }}>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }}}
+          placeholder="What do you do..."
+          rows={1}
+          style={{
+            flex: 1, background: 'var(--bg2)', border: '1px solid var(--border)',
+            borderRadius: '20px', padding: '10px 16px', color: 'var(--text)',
+            fontSize: '16px', outline: 'none', resize: 'none', maxHeight: '100px',
+            lineHeight: 1.4, fontFamily: "'EB Garamond', serif"
+          }}
+        />
+        <button onClick={sendMessage} style={{
+          width: '42px', height: '42px',
+          background: 'linear-gradient(135deg, #2a1f0a, #3d2e10)',
+          border: '1px solid var(--gold)', borderRadius: '50%',
+          color: 'var(--gold)', fontSize: '18px', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 0 15px rgba(201,168,76,0.15)'
+        }}>➤</button>
+      </div>
+
+      {/* Inventory Modal */}
+      {showInventory && (
+        <div onClick={() => setShowInventory(false)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+          display: 'flex', alignItems: 'flex-end', zIndex: 100
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            width: '100%', background: 'linear-gradient(180deg, #1a1530, #110e1c)',
+            border: '1px solid var(--border)', borderRadius: '20px 20px 0 0',
+            padding: '20px 24px 40px'
+          }}>
+            <div style={{ width: '40px', height: '4px', background: 'var(--border)', borderRadius: '2px', margin: '0 auto 20px' }}/>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', marginBottom: '16px' }}>
+              ⚔ Inventory
+            </div>
+            {gameState.inventory.map((item, i) => (
+              <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid rgba(201,168,76,0.1)', fontSize: '15px', color: 'var(--text)' }}>
+                {item}
+              </div>
+            ))}
+            <div style={{ padding: '10px 0', fontSize: '15px', color: 'var(--gold)' }}>🪙 {gameState.gold} Gold</div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-6px); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  )
+}
