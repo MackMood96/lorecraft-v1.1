@@ -90,21 +90,8 @@ export default function Game() {
     }
   }
 
-  function subscribeToMessages() {
-    const channel = supabase
-      .channel(`campaign:${campaignId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: `campaign_id=eq.${campaignId}`
-      }, (payload) => {
-        const msg = payload.new
-        addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
-      })
-      .subscribe()
-
-    return () => supabase.removeChannel(channel)
+function subscribeToMessages() {
+    return () => {}
   }
 
   async function saveMessage(role, content, playerName = null) {
@@ -154,8 +141,7 @@ export default function Game() {
     const data = await response.json()
     return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
   }
-
-  async function startAdventure() {
+async function startAdventure() {
     if (!player) return
     setLoading(true)
     let attempts = 0
@@ -166,6 +152,7 @@ export default function Game() {
         if (stateUpdate) updateGameState(stateUpdate)
         const clean = cleanText(raw)
         await saveMessage('dm', clean)
+        addMessage({ role: 'dm', text: clean })
         break
       } catch (e) {
         attempts++
@@ -178,11 +165,11 @@ export default function Game() {
     }
     setLoading(false)
   }
-
-  async function sendMessage() {
+ async function sendMessage() {
     if (!input.trim() || loading) return
     const userMsg = input.trim()
     setInput('')
+    addMessage({ role: 'player', text: userMsg, playerName: player?.name })
     await saveMessage('player', userMsg, player?.name)
     setLoading(true)
     try {
@@ -191,6 +178,7 @@ export default function Game() {
       if (stateUpdate) updateGameState(stateUpdate)
       const clean = cleanText(raw)
       await saveMessage('dm', clean)
+      addMessage({ role: 'dm', text: clean })
     } catch {
       addMessage({ role: 'dm', text: 'The magic falters...' })
     }
