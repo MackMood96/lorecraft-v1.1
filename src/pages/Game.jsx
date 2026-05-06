@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useGame } from '../context/GameContext'
+import { supabase } from '../supabase'
 
 const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Your role is to create an immersive, dynamic, and engaging adventure.
 
@@ -11,6 +12,7 @@ RULES:
 - Keep responses to 3-5 paragraphs max.
 - End with a clear prompt or 2-3 suggested actions in *italics*.
 - Track player HP. If they take damage, tell them.
+- Address players by name when multiple are present.
 
 When HP or gold changes, include at the END of your response:
 <state_update>
@@ -29,10 +31,16 @@ function cleanText(text) {
 
 export default function Game() {
   const { campaignId } = useParams()
-  const { player, gameState, updateGameState, messages, addMessage } = useGame()
+  const [searchParams] = useSearchParams()
+  const roomCode = searchParams.get('room')
+  const isHost = searchParams.get('host') === 'true'
+
+  const { player, gameState, updateGameState, messages, addMessage, setMessages } = useGame()
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showInventory, setShowInventory] = useState(false)
+  const [showRoomCode, setShowRoomCode] = useState(false)
+  const [players, setPlayers] = useState([])
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const hasStarted = useRef(false)
@@ -41,25 +49,87 @@ export default function Game() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Load existing messages from Supabase
   useEffect(() => {
-    if (player && messages.length === 0 && !hasStarted.current) {
+    if (!campaignId) return
+    loadMessages()
+    subscribeToMessages()
+    loadPlayers()
+  }, [campaignId])
+
+  useEffect(() => {
+    if (player && messages.length === 0 && !hasStarted.current && isHost) {
       hasStarted.current = true
       startAdventure()
     }
-  }, [player])
+  }, [player, messages])
+
+  async function loadMessages() {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: true })
+
+    if (data && data.length > 0) {
+      setMessages(data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name })))
+      hasStarted.current = true
+    }
+  }
+
+  async function loadPlayers() {
+    const { data } = await supabase
+      .from('messages')
+      .select('player_name')
+      .eq('campaign_id', campaignId)
+      .eq('role', 'player')
+
+    if (data) {
+      const unique = [...new Set(data.map(m => m.player_name).filter(Boolean))]
+      setPlayers(unique)
+    }
+  }
+
+  function subscribeToMessages() {
+    const channel = supabase
+      .channel(`campaign:${campaignId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `campaign_id=eq.${campaignId}`
+      }, (payload) => {
+        const msg = payload.new
+        addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
+      })
+      .subscribe()
+
+    return () => supabase.removeChannel(channel)
+  }
+
+  async function saveMessage(role, content, playerName = null) {
+    await supabase.from('messages').insert({
+      campaign_id: campaignId,
+      player_id: player?.id,
+      role,
+      content,
+      player_name: playerName
+    })
+  }
 
   async function callDM(userMessage) {
     const history = messages.map(m => ({
       role: m.role === 'dm' ? 'assistant' : 'user',
-      content: m.text
+      content: m.role === 'player' ? `${m.playerName || player?.name}: ${m.text}` : m.text
     }))
 
     if (userMessage) {
-      history.push({ role: 'user', content: userMessage })
+      history.push({ role: 'user', content: `${player?.name}: ${userMessage}` })
     }
 
     if (history.length === 0) {
-      history.push({ role: 'user', content: `Start my adventure as ${player?.name} the ${player?.class}` })
+      const playerList = players.length > 0 ? players.join(', ') : player?.name
+      history.push({ role: 'user', content: `Start our adventure. Players: ${playerList}. Host is ${player?.name} the ${player?.class}` })
     }
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -73,7 +143,7 @@ export default function Game() {
         messages: [
           {
             role: 'system',
-            content: SYSTEM_PROMPT + `\n\nPlayer: ${player?.name}, Class: ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}, Level: ${gameState.level}`
+            content: SYSTEM_PROMPT + `\n\nPlayers in this campaign: ${players.length > 0 ? players.join(', ') : player?.name}. Current player acting: ${player?.name} the ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}`
           },
           ...history
         ],
@@ -82,8 +152,7 @@ export default function Game() {
     })
 
     const data = await response.json()
-console.log('Groq response:', JSON.stringify(data))
-return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
+    return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
   }
 
   async function startAdventure() {
@@ -95,7 +164,8 @@ return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
         const raw = await callDM(null)
         const stateUpdate = parseStateUpdate(raw)
         if (stateUpdate) updateGameState(stateUpdate)
-        addMessage({ role: 'dm', text: cleanText(raw) })
+        const clean = cleanText(raw)
+        await saveMessage('dm', clean)
         break
       } catch (e) {
         attempts++
@@ -113,13 +183,14 @@ return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
     if (!input.trim() || loading) return
     const userMsg = input.trim()
     setInput('')
-    addMessage({ role: 'player', text: userMsg })
+    await saveMessage('player', userMsg, player?.name)
     setLoading(true)
     try {
       const raw = await callDM(userMsg)
       const stateUpdate = parseStateUpdate(raw)
       if (stateUpdate) updateGameState(stateUpdate)
-      addMessage({ role: 'dm', text: cleanText(raw) })
+      const clean = cleanText(raw)
+      await saveMessage('dm', clean)
     } catch {
       addMessage({ role: 'dm', text: 'The magic falters...' })
     }
@@ -150,11 +221,51 @@ return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', letterSpacing: '2px' }}>
           LORECRAFT
         </div>
-        <button onClick={() => setShowInventory(true)} style={{
-          background: 'none', border: '1px solid var(--border)',
-          borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
-        }}>🎒</button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {roomCode && (
+            <button onClick={() => setShowRoomCode(!showRoomCode)} style={{
+              background: 'none', border: '1px solid var(--border)',
+              borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '12px',
+              fontFamily: "'Cinzel', serif", letterSpacing: '1px'
+            }}>🔗 {roomCode}</button>
+          )}
+          <button onClick={() => setShowInventory(true)} style={{
+            background: 'none', border: '1px solid var(--border)',
+            borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
+          }}>🎒</button>
+        </div>
       </div>
+
+      {/* Room Code Banner */}
+      {showRoomCode && roomCode && (
+        <div style={{
+          background: 'linear-gradient(135deg, #1e1830, #2a2045)',
+          borderBottom: '1px solid var(--border)',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexShrink: 0
+        }}>
+          <div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '4px' }}>
+              INVITE FRIENDS — SHARE THIS CODE
+            </div>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '28px', color: 'var(--gold)', letterSpacing: '8px' }}>
+              {roomCode}
+            </div>
+          </div>
+          <button
+            onClick={() => { navigator.clipboard.writeText(roomCode); setShowRoomCode(false) }}
+            style={{
+              background: 'var(--bg3)', border: '1px solid var(--gold)',
+              borderRadius: '4px', color: 'var(--gold)', padding: '8px 16px',
+              fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '1px'
+            }}>
+            COPY
+          </button>
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{
@@ -182,7 +293,7 @@ return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
         {messages.map((msg, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
-              {msg.role === 'dm' ? 'DUNGEON MASTER' : player?.name?.toUpperCase()}
+              {msg.role === 'dm' ? 'DUNGEON MASTER' : (msg.playerName || player?.name)?.toUpperCase()}
             </div>
             <div style={{
               maxWidth: '85%',
@@ -306,3 +417,5 @@ return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
     </div>
   )
 }
+
+  
