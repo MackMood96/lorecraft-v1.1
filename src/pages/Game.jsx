@@ -54,8 +54,13 @@ export default function Game() {
   const hasAnnounced = useRef(false)
   const typingTimeoutRef = useRef(null)
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+ const prevMessageCount = useRef(0)
+
+useEffect(() => {
+    if (messages.length > prevMessageCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+    prevMessageCount.current = messages.length
   }, [messages])
 
   useEffect(() => {
@@ -113,7 +118,10 @@ export default function Game() {
       .order('created_at', { ascending: true })
 
     if (data && data.length > 0) {
-      setMessages(data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name })))
+      setMessages(prev => {
+        if (prev.length === data.length) return prev
+        return data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
+      })
       hasStarted.current = true
     }
   }
