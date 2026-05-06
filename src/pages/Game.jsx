@@ -7,6 +7,9 @@ const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy
 
 RULES:
 - Narrate vividly. Describe scenes with atmosphere, tension, and detail.
+- Address players by name when multiple are present.
+- Address players by name when multiple are present.
+- NEVER speak or act on behalf of player characters. If a player uses @mention to address another player, acknowledge it narratively but wait for that player to respond themselves. Only control NPCs and the world, never other players.
 - React to EVERYTHING the player does.
 - When combat occurs, roll dice explicitly: "Rolling d20... [result]!" and describe outcomes dramatically.
 - Keep responses to 3-5 paragraphs max.
@@ -41,20 +44,37 @@ export default function Game() {
   const [showInventory, setShowInventory] = useState(false)
   const [showRoomCode, setShowRoomCode] = useState(false)
   const [players, setPlayers] = useState([])
+  const [dmBusy, setDmBusy] = useState(false)
+  const [typers, setTypers] = useState([])
+  const [mentionSearch, setMentionSearch] = useState(null)
+  const [filteredPlayers, setFilteredPlayers] = useState([])
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const hasStarted = useRef(false)
+  const hasAnnounced = useRef(false)
+  const typingTimeoutRef = useRef(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Load existing messages from Supabase
   useEffect(() => {
     if (!campaignId) return
     loadMessages()
-    subscribeToMessages()
+    const cleanup = subscribeToMessages()
+    subscribeToPresence()
     loadPlayers()
+    checkDmBusy()
+
+    const poll = setInterval(() => {
+      loadMessages()
+      checkDmBusy()
+    }, 3000)
+
+    return () => {
+      cleanup()
+      clearInterval(poll)
+    }
   }, [campaignId])
 
   useEffect(() => {
@@ -62,7 +82,28 @@ export default function Game() {
       hasStarted.current = true
       startAdventure()
     }
-  }, [player, messages])
+    if (player && messages.length > 0 && !isHost && !hasAnnounced.current) {
+      hasAnnounced.current = true
+      saveMessage('player', `⚔️ ${player.name} the ${player.class} has joined the adventure!`, player.name)
+    }
+  }, [player, messages.length])
+
+  async function checkDmBusy() {
+    const { data } = await supabase
+      .from('campaigns')
+      .select('dm_busy')
+      .eq('id', campaignId)
+      .single()
+    if (data) setDmBusy(data.dm_busy)
+  }
+
+  async function setDmBusyState(busy) {
+    await supabase
+      .from('campaigns')
+      .update({ dm_busy: busy })
+      .eq('id', campaignId)
+    setDmBusy(busy)
+  }
 
   async function loadMessages() {
     const { data } = await supabase
@@ -90,8 +131,64 @@ export default function Game() {
     }
   }
 
-function subscribeToMessages() {
-    return () => {}
+  function subscribeToMessages() {
+    const channel = supabase.channel(`messages:${campaignId}`)
+
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `campaign_id=eq.${campaignId}`
+      },
+      (payload) => {
+        const msg = payload.new
+        addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
+        if (msg.role === 'player') loadPlayers()
+      }
+    )
+
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'campaigns',
+        filter: `id=eq.${campaignId}`
+      },
+      (payload) => {
+        setDmBusy(payload.new.dm_busy)
+      }
+    )
+
+    channel.subscribe()
+    return () => supabase.removeChannel(channel)
+  }
+
+  function subscribeToPresence() {
+    const channel = supabase.channel(`presence:${campaignId}`)
+
+    channel.on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState()
+      const typing = Object.entries(state)
+        .filter(([key, val]) => val[0]?.typing && key !== player?.name)
+        .map(([key]) => key)
+      setTypers(typing)
+    })
+
+    channel.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({ typing: false })
+      }
+    })
+
+    return channel
+  }
+
+  async function handleTyping() {
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    typingTimeoutRef.current = setTimeout(() => {}, 2000)
   }
 
   async function saveMessage(role, content, playerName = null) {
@@ -102,6 +199,31 @@ function subscribeToMessages() {
       content,
       player_name: playerName
     })
+  }
+
+  function handleInput(value) {
+    setInput(value)
+    const atIndex = value.lastIndexOf('@')
+    if (atIndex !== -1) {
+      const search = value.slice(atIndex + 1).toLowerCase()
+      const filtered = players.filter(p =>
+        p.toLowerCase().startsWith(search) && p !== player?.name
+      )
+      setMentionSearch(search)
+      setFilteredPlayers(filtered)
+    } else {
+      setMentionSearch(null)
+      setFilteredPlayers([])
+    }
+  }
+
+  function insertMention(playerName) {
+    const atIndex = input.lastIndexOf('@')
+    const newInput = input.slice(0, atIndex) + `@${playerName} `
+    setInput(newInput)
+    setMentionSearch(null)
+    setFilteredPlayers([])
+    inputRef.current?.focus()
   }
 
   async function callDM(userMessage) {
@@ -130,7 +252,7 @@ function subscribeToMessages() {
         messages: [
           {
             role: 'system',
-            content: SYSTEM_PROMPT + `\n\nPlayers in this campaign: ${players.length > 0 ? players.join(', ') : player?.name}. Current player acting: ${player?.name} the ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}`
+            content: SYSTEM_PROMPT + `\n\nThis is a SHARED multiplayer adventure. All players are in the same world together. Players in this campaign: ${players.length > 0 ? players.join(', ') : player?.name}. The player currently acting is ${player?.name} the ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}. Treat all players as a party adventuring together.`
           },
           ...history
         ],
@@ -141,8 +263,10 @@ function subscribeToMessages() {
     const data = await response.json()
     return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
   }
-async function startAdventure() {
+
+  async function startAdventure() {
     if (!player) return
+    await setDmBusyState(true)
     setLoading(true)
     let attempts = 0
     while (attempts < 3) {
@@ -152,25 +276,26 @@ async function startAdventure() {
         if (stateUpdate) updateGameState(stateUpdate)
         const clean = cleanText(raw)
         await saveMessage('dm', clean)
-        addMessage({ role: 'dm', text: clean })
         break
       } catch (e) {
         attempts++
         if (attempts < 3) {
           await new Promise(r => setTimeout(r, 5000))
         } else {
-          addMessage({ role: 'dm', text: 'The ancient magic stirs... try sending a message to begin your adventure.' })
+          await saveMessage('dm', 'The ancient magic stirs... try sending a message to begin your adventure.')
         }
       }
     }
+    await setDmBusyState(false)
     setLoading(false)
   }
- async function sendMessage() {
-    if (!input.trim() || loading) return
+
+  async function sendMessage() {
+    if (!input.trim() || loading || dmBusy) return
     const userMsg = input.trim()
     setInput('')
-    addMessage({ role: 'player', text: userMsg, playerName: player?.name })
     await saveMessage('player', userMsg, player?.name)
+    await setDmBusyState(true)
     setLoading(true)
     try {
       const raw = await callDM(userMsg)
@@ -178,10 +303,10 @@ async function startAdventure() {
       if (stateUpdate) updateGameState(stateUpdate)
       const clean = cleanText(raw)
       await saveMessage('dm', clean)
-      addMessage({ role: 'dm', text: clean })
     } catch {
-      addMessage({ role: 'dm', text: 'The magic falters...' })
+      await saveMessage('dm', 'The magic falters...')
     }
+    await setDmBusyState(false)
     setLoading(false)
   }
 
@@ -276,6 +401,23 @@ async function startAdventure() {
         </span>
       </div>
 
+      {/* DM Busy Banner */}
+      {dmBusy && !loading && (
+        <div style={{
+          background: 'rgba(201,168,76,0.05)',
+          borderBottom: '1px solid var(--border)',
+          padding: '6px 16px',
+          fontFamily: "'Cinzel', serif",
+          fontSize: '10px',
+          letterSpacing: '2px',
+          color: 'var(--text-dim)',
+          textAlign: 'center',
+          flexShrink: 0
+        }}>
+          ⚔️ THE DUNGEON MASTER IS RESPONDING...
+        </div>
+      )}
+
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {messages.map((msg, i) => (
@@ -296,10 +438,41 @@ async function startAdventure() {
               color: 'var(--text)',
               whiteSpace: 'pre-wrap'
             }}>
-              {msg.text}
+              {msg.text.split(/(@\w+)/g).map((part, i) =>
+                part.startsWith('@') ? (
+                  <span key={i} style={{ color: 'var(--gold)', fontWeight: 'bold' }}>{part}</span>
+                ) : part
+              )}
             </div>
           </div>
         ))}
+
+        {/* Typing Indicators */}
+        {typers.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
+              {typers.join(', ').toUpperCase()}
+            </div>
+            <div style={{
+              padding: '10px 16px',
+              background: 'linear-gradient(135deg, #0f1a14, #142010)',
+              border: '1px solid rgba(39,174,96,0.2)',
+              borderRight: '2px solid var(--green)',
+              borderRadius: '12px 0 12px 12px',
+              display: 'flex', gap: '4px',
+              width: 'fit-content',
+              alignSelf: 'flex-end'
+            }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{
+                  width: '6px', height: '6px', background: 'var(--green)', borderRadius: '50%',
+                  animation: 'bounce 1.2s ease-in-out infinite',
+                  animationDelay: `${i * 0.2}s`
+                }}/>
+              ))}
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -331,43 +504,84 @@ async function startAdventure() {
           <button key={action} onClick={() => quickAction(action.split(' ').slice(1).join(' '))}
             style={{
               background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '16px',
-              padding: '6px 14px', color: 'var(--text-dim)', fontSize: '11px',
+              padding: '6px 14px', color: dmBusy ? '#3a3050' : 'var(--text-dim)', fontSize: '11px',
               letterSpacing: '1px', whiteSpace: 'nowrap', flexShrink: 0,
-              fontFamily: "'Cinzel', serif"
+              fontFamily: "'Cinzel', serif",
+              cursor: dmBusy ? 'not-allowed' : 'pointer'
             }}>
             {action}
           </button>
         ))}
       </div>
 
+      {/* @ Mention Dropdown */}
+      {mentionSearch !== null && filteredPlayers.length > 0 && (
+        <div style={{
+          position: 'absolute',
+          bottom: '80px',
+          left: '12px',
+          background: 'var(--bg3)',
+          border: '1px solid var(--gold)',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          zIndex: 50,
+          boxShadow: '0 0 20px rgba(201,168,76,0.2)'
+        }}>
+          {filteredPlayers.map(p => (
+            <div
+              key={p}
+              onClick={() => insertMention(p)}
+              style={{
+                padding: '10px 16px',
+                cursor: 'pointer',
+                fontFamily: "'Cinzel', serif",
+                fontSize: '12px',
+                color: 'var(--gold-light)',
+                letterSpacing: '1px',
+                borderBottom: '1px solid var(--border)'
+              }}
+            >
+              ⚔️ {p}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <div style={{
         padding: '10px 12px 16px',
         background: 'rgba(10,8,18,0.98)',
         borderTop: '1px solid var(--border)',
-        display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0
+        display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0,
+        position: 'relative'
       }}>
         <textarea
           ref={inputRef}
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={e => handleInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }}}
-          placeholder="What do you do..."
+          placeholder={dmBusy ? 'The DM is responding...' : 'What do you do... (@ to mention a player)'}
+          disabled={dmBusy}
           rows={1}
           style={{
-            flex: 1, background: 'var(--bg2)', border: '1px solid var(--border)',
-            borderRadius: '20px', padding: '10px 16px', color: 'var(--text)',
+            flex: 1, background: 'var(--bg2)', border: `1px solid ${dmBusy ? 'rgba(201,168,76,0.1)' : 'var(--border)'}`,
+            borderRadius: '20px', padding: '10px 16px', color: dmBusy ? 'var(--text-dim)' : 'var(--text)',
             fontSize: '16px', outline: 'none', resize: 'none', maxHeight: '100px',
-            lineHeight: 1.4, fontFamily: "'EB Garamond', serif"
+            lineHeight: 1.4, fontFamily: "'EB Garamond', serif",
+            cursor: dmBusy ? 'not-allowed' : 'text'
           }}
         />
-        <button onClick={sendMessage} style={{
+        <button onClick={sendMessage}
+          disabled={dmBusy}
+          style={{
           width: '42px', height: '42px',
-          background: 'linear-gradient(135deg, #2a1f0a, #3d2e10)',
-          border: '1px solid var(--gold)', borderRadius: '50%',
-          color: 'var(--gold)', fontSize: '18px', display: 'flex',
+          background: dmBusy ? 'var(--bg2)' : 'linear-gradient(135deg, #2a1f0a, #3d2e10)',
+          border: `1px solid ${dmBusy ? 'var(--border)' : 'var(--gold)'}`,
+          borderRadius: '50%',
+          color: dmBusy ? 'var(--text-dim)' : 'var(--gold)', fontSize: '18px', display: 'flex',
           alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 0 15px rgba(201,168,76,0.15)'
+          boxShadow: dmBusy ? 'none' : '0 0 15px rgba(201,168,76,0.15)',
+          cursor: dmBusy ? 'not-allowed' : 'pointer'
         }}>➤</button>
       </div>
 
@@ -405,5 +619,3 @@ async function startAdventure() {
     </div>
   )
 }
-
-  
