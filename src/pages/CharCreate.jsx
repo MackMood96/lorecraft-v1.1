@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGame } from '../context/GameContext'
 import { supabase } from '../supabase'
 
@@ -47,6 +47,8 @@ function buildAvatarPrompt(cls, race, affinity, appearance) {
 
 export default function CharCreate() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const joinRoomCode = searchParams.get('room')
   const { setPlayer, updateGameState } = useGame()
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
@@ -68,16 +70,38 @@ export default function CharCreate() {
     const cls = CLASSES.find(c => c.id === selectedClass)
     const race = RACES.find(r => r.id === selectedRace)
     const affinity = AFFINITIES.find(a => a.id === selectedAffinity)
-    const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
 
     try {
-      const { data: campaign, error: campError } = await supabase
-        .from('campaigns')
-        .insert({ room_code: roomCode, name: `${name}'s Campaign` })
-        .select()
-        .single()
+      let campaignId, roomCode
 
-      if (campError) throw campError
+      if (joinRoomCode) {
+        // Joining existing campaign
+        const { data: existingCampaign, error: campError } = await supabase
+          .from('campaigns')
+          .select()
+          .eq('room_code', joinRoomCode)
+          .single()
+
+        if (campError || !existingCampaign) {
+          console.error('Campaign not found')
+          setLoading(false)
+          return
+        }
+        campaignId = existingCampaign.id
+        roomCode = joinRoomCode
+      } else {
+        // Creating new campaign
+        const newRoomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+        const { data: newCampaign, error: campError } = await supabase
+          .from('campaigns')
+          .insert({ room_code: newRoomCode, name: `${name}'s Campaign` })
+          .select()
+          .single()
+
+        if (campError) throw campError
+        campaignId = newCampaign.id
+        roomCode = newRoomCode
+      }
 
       const { data: player, error: playerError } = await supabase
         .from('players')
@@ -126,13 +150,22 @@ export default function CharCreate() {
         }
       }
 
-      setCampaignData({ id: campaign.id, roomCode })
+      setCampaignData({ id: campaignId, roomCode, isJoin: !!joinRoomCode })
       setShowReveal(true)
       setLoading(false)
 
     } catch (e) {
       console.error(e)
       setLoading(false)
+    }
+  }
+
+  async function handleEnterRealm() {
+    if (!campaignData) return
+    if (campaignData.isJoin) {
+      navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}`)
+    } else {
+      navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}&host=true`)
     }
   }
 
@@ -249,7 +282,7 @@ export default function CharCreate() {
         )}
 
         <button
-          onClick={() => navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}&host=true`)}
+          onClick={handleEnterRealm}
           style={{
             marginTop: '8px',
             padding: '14px 40px',
@@ -263,7 +296,7 @@ export default function CharCreate() {
             cursor: 'pointer',
             boxShadow: '0 0 30px rgba(201,168,76,0.2)'
           }}>
-          ENTER THE REALM →
+          {campaignData?.isJoin ? 'JOIN THE REALM →' : 'ENTER THE REALM →'}
         </button>
 
         <style>{`
@@ -290,10 +323,10 @@ export default function CharCreate() {
     }}>
       <div style={{ padding: '24px 24px 0' }}>
         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '20px', color: 'var(--gold-light)', letterSpacing: '2px' }}>
-          Create Your Hero
+          {joinRoomCode ? 'Join the Adventure' : 'Create Your Hero'}
         </div>
         <div style={{ fontSize: '14px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px' }}>
-          Who will you become in the realm of Lorecraft?
+          {joinRoomCode ? `Joining campaign ${joinRoomCode}` : 'Who will you become in the realm of Lorecraft?'}
         </div>
         <div style={{ height: '1px', background: 'linear-gradient(90deg, var(--gold), transparent)', marginTop: '12px', opacity: 0.4 }}/>
       </div>
@@ -542,7 +575,7 @@ export default function CharCreate() {
               boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none',
               transition: 'all 0.3s'
             }}>
-            {loading ? 'FORGING YOUR LEGEND...' : 'ENTER THE REALM'}
+            {loading ? 'FORGING YOUR LEGEND...' : joinRoomCode ? 'JOIN THE REALM' : 'ENTER THE REALM'}
           </button>
         )}
       </div>

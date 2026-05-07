@@ -22,7 +22,7 @@ When HP or gold changes, include at the END of your response:
 {"hp": NEW_HP, "gold": NEW_GOLD}
 </state_update>`
 
-async function speakText(text, muted) {
+async function speakText(text, muted, audioRef) {
   if (muted) return
   const clean = text.replace(/\*[^*]+\*/g, '').replace(/<[^>]+>/g, '').trim()
   if (!clean) return
@@ -35,22 +35,15 @@ async function speakText(text, muted) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           input: { text: clean },
-          voice: {
-            languageCode: 'en-GB',
-            name: 'en-GB-Wavenet-D'
-          },
-          audioConfig: {
-            audioEncoding: 'MP3',
-            speakingRate: 0.9,
-            pitch: -2.0
-          }
+          voice: { languageCode: 'en-GB', name: 'en-GB-Neural2-D' },
+          audioConfig: { audioEncoding: 'MP3', speakingRate: 0.87, pitch: -3.0 }
         })
       }
     )
-
     const data = await response.json()
     if (data.audioContent) {
       const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`)
+      if (audioRef) audioRef.current = audio
       audio.play()
     }
   } catch (e) {
@@ -93,6 +86,7 @@ export default function Game() {
   const typingTimeoutRef = useRef(null)
   const prevMessageCount = useRef(0)
   const mutedRef = useRef(false)
+  const currentAudioRef = useRef(null)
 
   useEffect(() => { mutedRef.current = muted }, [muted])
 
@@ -164,13 +158,14 @@ export default function Game() {
         const newMessages = data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
         const lastMsg = newMessages[newMessages.length - 1]
         if (lastMsg.role === 'dm' && prev.length < newMessages.length) {
-          speakText(lastMsg.text, mutedRef.current)
+          speakText(lastMsg.text, mutedRef.current, currentAudioRef)
         }
         return newMessages
       })
       hasStarted.current = true
     }
   }
+
   async function loadPlayers() {
     const { data } = await supabase
       .from('messages')
@@ -213,7 +208,7 @@ export default function Game() {
       (payload) => {
         const msg = payload.new
         addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
-        if (msg.role === 'dm') speakText(msg.content, mutedRef.current)
+        if (msg.role === 'dm') speakText(msg.content, mutedRef.current, currentAudioRef)
         if (msg.role === 'player') loadPlayers()
       }
     )
@@ -405,8 +400,13 @@ export default function Game() {
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button onClick={() => {
-            window.speechSynthesis.cancel()
-            setMuted(prev => !prev)
+            const newMuted = !mutedRef.current
+            mutedRef.current = newMuted
+            setMuted(newMuted)
+            if (newMuted && currentAudioRef.current) {
+              currentAudioRef.current.pause()
+              currentAudioRef.current = null
+            }
           }} style={{
             background: 'none', border: '1px solid var(--border)',
             borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
