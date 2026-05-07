@@ -8,19 +8,55 @@ const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy
 RULES:
 - Narrate vividly. Describe scenes with atmosphere, tension, and detail.
 - Address players by name when multiple are present.
-- Address players by name when multiple are present.
-- NEVER speak or act on behalf of player characters. If a player uses @mention to address another player, acknowledge it narratively but wait for that player to respond themselves. Only control NPCs and the world, never other players.
+- NEVER speak, act, or respond on behalf of ANY player character under ANY circumstances. Players are real humans controlling their own characters.
+- If Player A uses @PlayerB to address Player B, the DM should ONLY acknowledge the action narratively (e.g. "Mack turns to May, waiting for her response...") in 1-2 sentences maximum, then STOP. Do NOT write what Player B says or does. Wait for the actual player to respond.
+- You control ONLY the world, environment, and NPCs. Never put words in a player's mouth.
 - React to EVERYTHING the player does.
 - When combat occurs, roll dice explicitly: "Rolling d20... [result]!" and describe outcomes dramatically.
 - Keep responses to 3-5 paragraphs max.
 - End with a clear prompt or 2-3 suggested actions in *italics*.
 - Track player HP. If they take damage, tell them.
-- Address players by name when multiple are present.
 
 When HP or gold changes, include at the END of your response:
 <state_update>
 {"hp": NEW_HP, "gold": NEW_GOLD}
 </state_update>`
+
+async function speakText(text, muted) {
+  if (muted) return
+  const clean = text.replace(/\*[^*]+\*/g, '').replace(/<[^>]+>/g, '').trim()
+  if (!clean) return
+
+  try {
+    const response = await fetch(
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${import.meta.env.VITE_GOOGLE_TTS_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text: clean },
+          voice: {
+            languageCode: 'en-GB',
+            name: 'en-GB-Wavenet-D'
+          },
+          audioConfig: {
+            audioEncoding: 'MP3',
+            speakingRate: 0.9,
+            pitch: -2.0
+          }
+        })
+      }
+    )
+
+    const data = await response.json()
+    if (data.audioContent) {
+      const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`)
+      audio.play()
+    }
+  } catch (e) {
+    console.log('TTS error:', e)
+  }
+}
 
 function parseStateUpdate(text) {
   const match = text.match(/<state_update>([\s\S]*?)<\/state_update>/)
@@ -48,16 +84,19 @@ export default function Game() {
   const [typers, setTypers] = useState([])
   const [mentionSearch, setMentionSearch] = useState(null)
   const [filteredPlayers, setFilteredPlayers] = useState([])
+  const [playerAvatars, setPlayerAvatars] = useState({})
+  const [muted, setMuted] = useState(false)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const hasStarted = useRef(false)
   const hasAnnounced = useRef(false)
   const typingTimeoutRef = useRef(null)
-  const [playerAvatars, setPlayerAvatars] = useState({})
+  const prevMessageCount = useRef(0)
+  const mutedRef = useRef(false)
 
- const prevMessageCount = useRef(0)
+  useEffect(() => { mutedRef.current = muted }, [muted])
 
-useEffect(() => {
+  useEffect(() => {
     if (messages.length > prevMessageCount.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
@@ -122,12 +161,16 @@ useEffect(() => {
     if (data && data.length > 0) {
       setMessages(prev => {
         if (prev.length === data.length) return prev
-        return data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
+        const newMessages = data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
+        const lastMsg = newMessages[newMessages.length - 1]
+        if (lastMsg.role === 'dm' && prev.length < newMessages.length) {
+          speakText(lastMsg.text, mutedRef.current)
+        }
+        return newMessages
       })
       hasStarted.current = true
     }
   }
-
   async function loadPlayers() {
     const { data } = await supabase
       .from('messages')
@@ -140,6 +183,7 @@ useEffect(() => {
       setPlayers(unique)
     }
   }
+
   async function loadPlayerAvatars() {
     const { data } = await supabase
       .from('players')
@@ -169,6 +213,7 @@ useEffect(() => {
       (payload) => {
         const msg = payload.new
         addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
+        if (msg.role === 'dm') speakText(msg.content, mutedRef.current)
         if (msg.role === 'player') loadPlayers()
       }
     )
@@ -359,6 +404,15 @@ useEffect(() => {
           LORECRAFT
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={() => {
+            window.speechSynthesis.cancel()
+            setMuted(prev => !prev)
+          }} style={{
+            background: 'none', border: '1px solid var(--border)',
+            borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
+          }}>
+            {muted ? '🔇' : '🔊'}
+          </button>
           {roomCode && (
             <button onClick={() => setShowRoomCode(!showRoomCode)} style={{
               background: 'none', border: '1px solid var(--border)',
@@ -445,27 +499,27 @@ useEffect(() => {
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {messages.map((msg, i) => (
-  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: msg.role === 'player' ? 'row-reverse' : 'row' }}>
-      {msg.role === 'player' && playerAvatars[msg.playerName || player?.name] && (
-        <img
-          src={playerAvatars[msg.playerName || player?.name]}
-          alt={msg.playerName}
-          style={{
-            width: '24px',
-            height: '24px',
-            borderRadius: '50%',
-            objectFit: 'cover',
-            border: '1px solid var(--border)',
-            flexShrink: 0
-          }}
-        />
-      )}
-      <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
-        {msg.role === 'dm' ? 'DUNGEON MASTER' : (msg.playerName || player?.name)?.toUpperCase()}
-      </div>
-    </div>
-    <div style={{
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: msg.role === 'player' ? 'row-reverse' : 'row' }}>
+              {msg.role === 'player' && playerAvatars[msg.playerName || player?.name] && (
+                <img
+                  src={playerAvatars[msg.playerName || player?.name]}
+                  alt={msg.playerName}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    border: '1px solid var(--border)',
+                    flexShrink: 0
+                  }}
+                />
+              )}
+              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
+                {msg.role === 'dm' ? 'DUNGEON MASTER' : (msg.playerName || player?.name)?.toUpperCase()}
+              </div>
+            </div>
+            <div style={{
               maxWidth: '85%',
               padding: '12px 16px',
               borderRadius: msg.role === 'dm' ? '0 12px 12px 12px' : '12px 0 12px 12px',
