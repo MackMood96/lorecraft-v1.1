@@ -53,6 +53,7 @@ export default function Game() {
   const hasStarted = useRef(false)
   const hasAnnounced = useRef(false)
   const typingTimeoutRef = useRef(null)
+  const [playerAvatars, setPlayerAvatars] = useState({})
 
  const prevMessageCount = useRef(0)
 
@@ -69,6 +70,7 @@ useEffect(() => {
     const cleanup = subscribeToMessages()
     subscribeToPresence()
     loadPlayers()
+    loadPlayerAvatars()
     checkDmBusy()
 
     const poll = setInterval(() => {
@@ -136,6 +138,20 @@ useEffect(() => {
     if (data) {
       const unique = [...new Set(data.map(m => m.player_name).filter(Boolean))]
       setPlayers(unique)
+    }
+  }
+  async function loadPlayerAvatars() {
+    const { data } = await supabase
+      .from('players')
+      .select('name, avatar_url')
+      .not('avatar_url', 'is', null)
+
+    if (data) {
+      const avatarMap = {}
+      data.forEach(p => {
+        if (p.avatar_url) avatarMap[p.name] = p.avatar_url
+      })
+      setPlayerAvatars(avatarMap)
     }
   }
 
@@ -429,11 +445,27 @@ useEffect(() => {
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {messages.map((msg, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
-              {msg.role === 'dm' ? 'DUNGEON MASTER' : (msg.playerName || player?.name)?.toUpperCase()}
-            </div>
-            <div style={{
+  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: msg.role === 'player' ? 'row-reverse' : 'row' }}>
+      {msg.role === 'player' && playerAvatars[msg.playerName || player?.name] && (
+        <img
+          src={playerAvatars[msg.playerName || player?.name]}
+          alt={msg.playerName}
+          style={{
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            objectFit: 'cover',
+            border: '1px solid var(--border)',
+            flexShrink: 0
+          }}
+        />
+      )}
+      <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)' }}>
+        {msg.role === 'dm' ? 'DUNGEON MASTER' : (msg.playerName || player?.name)?.toUpperCase()}
+      </div>
+    </div>
+    <div style={{
               maxWidth: '85%',
               padding: '12px 16px',
               borderRadius: msg.role === 'dm' ? '0 12px 12px 12px' : '12px 0 12px 12px',
