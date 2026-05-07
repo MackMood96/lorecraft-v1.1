@@ -109,17 +109,23 @@ export default function CharCreate() {
       })
 
       const prompt = buildAvatarPrompt(cls, race, affinity, appearance)
-const url = `https://image.pollinations.ai/prompt/${prompt}?width=512&height=512&nologo=true&seed=${Date.now()}`
-console.log('Avatar URL:', url)
+      const url = `https://image.pollinations.ai/prompt/${prompt}?width=512&height=512&nologo=true&seed=${Date.now()}`
 
-try {
-  const imgResponse = await fetch(url)
-  const blob = await imgResponse.blob()
-  const blobUrl = URL.createObjectURL(blob)
-  setAvatarUrl(blobUrl)
-} catch {
-  setAvatarUrl(url)
-}
+      const isLocalhost = window.location.hostname === 'localhost'
+      if (isLocalhost) {
+        setAvatarUrl(url)
+      } else {
+        try {
+          const imgResponse = await fetch(url)
+          const blob = await imgResponse.blob()
+          const blobUrl = URL.createObjectURL(blob)
+          setAvatarUrl(blobUrl)
+          await supabase.from('players').update({ avatar_url: url }).eq('id', player.id)
+        } catch {
+          setAvatarUrl(url)
+        }
+      }
+
       setCampaignData({ id: campaign.id, roomCode })
       setShowReveal(true)
       setLoading(false)
