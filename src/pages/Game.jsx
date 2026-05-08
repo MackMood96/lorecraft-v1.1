@@ -45,7 +45,7 @@ function detectMood(text) {
   return 'exploration'
 }
 
-async function speakText(text, muted, audioRef) {
+async function speakText(text, muted, audioRef, mutedRef) {
   if (muted) return
   const clean = text.replace(/<[^>]+>/g, '').trim()
   if (!clean) return
@@ -233,7 +233,7 @@ export default function Game() {
         const newMessages = data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
         const lastMsg = newMessages[newMessages.length - 1]
         if (lastMsg.role === 'dm' && prev.length < newMessages.length) {
-          speakText(lastMsg.text, mutedRef.current, currentAudioRef)
+          speakText(lastMsg.text, mutedRef.current, currentAudioRef, mutedRef)
           playMusic(detectMood(lastMsg.text))
         }
         return newMessages
@@ -285,7 +285,7 @@ export default function Game() {
         const msg = payload.new
         addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
         if (msg.role === 'dm') {
-          speakText(msg.content, mutedRef.current, currentAudioRef)
+          speakText(msg.content, mutedRef.current, currentAudioRef, mutedRef)
           playMusic(detectMood(msg.content))
         }
         if (msg.role === 'player') loadPlayers()
