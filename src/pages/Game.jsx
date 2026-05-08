@@ -45,39 +45,65 @@ function detectMood(text) {
   return 'exploration'
 }
 
+function pcmToWav(base64Pcm) {
+  const raw = atob(base64Pcm)
+  const pcm = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) pcm[i] = raw.charCodeAt(i)
+  const wav = new ArrayBuffer(44 + pcm.length)
+  const view = new DataView(wav)
+  const write = (offset, str) => [...str].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)))
+  write(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true)
+  write(8, 'WAVE'); write(12, 'fmt ')
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true); view.setUint32(24, 24000, true)
+  view.setUint32(28, 48000, true); view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true); write(36, 'data')
+  view.setUint32(40, pcm.length, true)
+  new Uint8Array(wav).set(pcm, 44)
+  return new Blob([wav], { type: 'audio/wav' })
+}
+
+async function geminiTTS(segment) {
+  const isDialogue = segment.trim().startsWith('"')
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: isDialogue
+              ? `Say this in character as an NPC — gruff for villains, warm for merchants, mysterious for mages: ${segment.trim()}`
+              : `Say this like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas: ${segment.trim()}`
+          }]
+        }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } } }
+        }
+      })
+    }
+  )
+  const data = await response.json()
+  const base64 = data.candidates[0].content.parts[0].inlineData.data
+  const blob = pcmToWav(base64)
+  const audio = new Audio(URL.createObjectURL(blob))
+  return audio
+}
+
 async function speakText(text, muted, audioRef, mutedRef, setTtsStatus) {
   if (muted) return
   const clean = text.replace(/<[^>]+>/g, '').trim()
   if (!clean) return
-
-  // Wait for puter.ai to be available
-  let attempts = 0
-  while (!window.puter?.ai && attempts < 20) {
-    await new Promise(r => setTimeout(r, 500))
-    attempts++
-  }
-  if (!window.puter?.ai) {
-    console.log('Puter not available')
-    setTtsStatus?.('error')
-    return
-  }
 
   setTtsStatus?.('loading')
 
   try {
     const segments = clean.split(/(".*?")/gs).filter(s => s.trim())
 
-    const getTTS = (segment) => window.puter.ai.txt2speech(segment.trim(), {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash-preview-tts',
-      voice: 'Charon',
-      instructions: segment.trim().startsWith('"')
-        ? 'Speak in character as the NPC — match their personality, gruff for villains, warm for merchants, mysterious for mages.'
-        : 'Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. Slightly faster pace, clear diction, dramatic pauses only at key moments.'
-    })
-
     // Load first segment
-    let currentAudio = await getTTS(segments[0])
+    let currentAudio = await geminiTTS(segments[0])
     if (audioRef) audioRef.current = currentAudio
 
     setTtsStatus?.('playing')
@@ -86,7 +112,7 @@ async function speakText(text, muted, audioRef, mutedRef, setTtsStatus) {
       if (mutedRef?.current) break
 
       // Start loading next segment while current plays
-      const nextPromise = i + 1 < segments.length ? getTTS(segments[i + 1]) : null
+      const nextPromise = i + 1 < segments.length ? geminiTTS(segments[i + 1]) : null
 
       await new Promise((resolve, reject) => {
         currentAudio.addEventListener('ended', resolve)
@@ -145,7 +171,6 @@ export default function Game() {
   const musicRef = useRef(null)
   const currentMoodRef = useRef(null)
   const musicMutedRef = useRef(false)
-  const puterReadyRef = useRef(false)
 
   useEffect(() => { mutedRef.current = muted }, [muted])
   useEffect(() => { musicMutedRef.current = musicMuted }, [musicMuted])
@@ -166,25 +191,6 @@ export default function Game() {
     loadPlayerAvatars()
     checkDmBusy()
 
-    // Warm up Puter TTS after 3 seconds so it's ready when DM speaks
-    const warmupTimer = setTimeout(async () => {
-      try {
-        if (window.puter?.ai) {
-          console.log('Warming up Puter TTS...')
-          await window.puter.ai.txt2speech(' ', {
-            provider: 'gemini',
-            model: 'gemini-2.5-flash-preview-tts',
-            voice: 'Charon',
-            instructions: 'Say nothing.'
-          })
-          puterReadyRef.current = true
-          console.log('Puter TTS ready!')
-        }
-      } catch (e) {
-        console.log('Puter warmup failed:', e)
-      }
-    }, 3000)
-
     const poll = setInterval(() => {
       loadMessages()
       checkDmBusy()
@@ -193,7 +199,6 @@ export default function Game() {
     return () => {
       cleanup()
       clearInterval(poll)
-      clearTimeout(warmupTimer)
       if (musicRef.current) {
         musicRef.current.pause()
         musicRef.current = null
