@@ -22,29 +22,75 @@ When HP or gold changes, include at the END of your response:
 {"hp": NEW_HP, "gold": NEW_GOLD}
 </state_update>`
 
+const MUSIC_TRACKS = {
+  exploration: '/music/exploration.mp3',
+  combat: '/music/combat.mp3',
+  mystery: '/music/mystery.mp3',
+  tavern: '/music/tavern.mp3',
+  dungeon: '/music/dungeon.mp3',
+  inn: '/music/inn.mp3'
+}
+
+function detectMood(text) {
+  const lower = text.toLowerCase()
+  if (lower.includes('attack') || lower.includes('combat') || lower.includes('fight') ||
+      lower.includes('battle') || lower.includes('enemy') || lower.includes('sword') ||
+      lower.includes('blood') || lower.includes('roll') || lower.includes('damage')) return 'combat'
+  if (lower.includes('tavern') || lower.includes('inn') || lower.includes('bar') ||
+      lower.includes('drink') || lower.includes('ale') || lower.includes('bard')) return 'tavern'
+  if (lower.includes('dungeon') || lower.includes('cave') || lower.includes('dark') ||
+      lower.includes('shadow') || lower.includes('undead') || lower.includes('crypt')) return 'dungeon'
+  if (lower.includes('mysterious') || lower.includes('strange') || lower.includes('puzzle') ||
+      lower.includes('secret') || lower.includes('hidden') || lower.includes('ancient')) return 'mystery'
+  return 'exploration'
+}
+
 async function speakText(text, muted, audioRef) {
   if (muted) return
-  const clean = text.replace(/\*[^*]+\*/g, '').replace(/<[^>]+>/g, '').trim()
+  const clean = text.replace(/<[^>]+>/g, '').trim()
   if (!clean) return
 
+  // Wait for Puter to fully initialize
+  let attempts = 0
+  while ((!window.puter || !window.puter.ai) && attempts < 20) {
+    await new Promise(r => setTimeout(r, 500))
+    attempts++
+  }
+  if (!window.puter?.ai) {
+    console.log('Puter not available')
+    return
+  }
+
   try {
-    const response = await fetch(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${import.meta.env.VITE_GOOGLE_TTS_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input: { text: clean },
-          voice: { languageCode: 'en-GB', name: 'en-GB-Neural2-D' },
-          audioConfig: { audioEncoding: 'MP3', speakingRate: 0.87, pitch: -3.0 }
-        })
-      }
-    )
-    const data = await response.json()
-    if (data.audioContent) {
-      const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`)
-      if (audioRef) audioRef.current = audio
-      audio.play()
+    const segments = clean.split(/(".*?")/gs).filter(s => s.trim())
+
+    // Load all segments simultaneously
+    const audioPromises = segments.map(segment => {
+      const isDialogue = segment.trim().startsWith('"')
+      return window.puter.ai.txt2speech(segment.trim(), {
+        provider: 'gemini',
+        model: 'gemini-2.5-flash-preview-tts',
+        voice: 'Charon',
+        instructions: isDialogue
+          ? 'Speak in character as the NPC — match their personality, gruff for villains, warm for merchants, mysterious for mages.'
+          : 'Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. Slightly faster pace, clear diction, dramatic pauses only at key moments.'
+      })
+    })
+
+    // Wait for all segments to load
+    const audios = await Promise.all(audioPromises)
+
+    // Store first audio in ref for mute control
+    if (audioRef) audioRef.current = audios[0]
+
+    // Play sequentially
+    for (const audio of audios) {
+      if (mutedRef?.current) break
+      await new Promise((resolve, reject) => {
+        audio.addEventListener('ended', resolve)
+        audio.addEventListener('error', reject)
+        audio.play()
+      })
     }
   } catch (e) {
     console.log('TTS error:', e)
@@ -79,6 +125,7 @@ export default function Game() {
   const [filteredPlayers, setFilteredPlayers] = useState([])
   const [playerAvatars, setPlayerAvatars] = useState({})
   const [muted, setMuted] = useState(false)
+  const [musicMuted, setMusicMuted] = useState(false)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const hasStarted = useRef(false)
@@ -87,8 +134,12 @@ export default function Game() {
   const prevMessageCount = useRef(0)
   const mutedRef = useRef(false)
   const currentAudioRef = useRef(null)
+  const musicRef = useRef(null)
+  const currentMoodRef = useRef(null)
+  const musicMutedRef = useRef(false)
 
   useEffect(() => { mutedRef.current = muted }, [muted])
+  useEffect(() => { musicMutedRef.current = musicMuted }, [musicMuted])
 
   useEffect(() => {
     if (messages.length > prevMessageCount.current) {
@@ -114,6 +165,10 @@ export default function Game() {
     return () => {
       cleanup()
       clearInterval(poll)
+      if (musicRef.current) {
+        musicRef.current.pause()
+        musicRef.current = null
+      }
     }
   }, [campaignId])
 
@@ -127,6 +182,26 @@ export default function Game() {
       saveMessage('player', `⚔️ ${player.name} the ${player.class} has joined the adventure!`, player.name)
     }
   }, [player, messages.length])
+
+  function playMusic(mood) {
+    if (musicMutedRef.current) return
+    if (currentMoodRef.current === mood && musicRef.current && !musicRef.current.paused) return
+
+    const track = MUSIC_TRACKS[mood]
+    if (!track) return
+
+    if (musicRef.current) {
+      musicRef.current.pause()
+      musicRef.current = null
+    }
+
+    const audio = new Audio(track)
+    audio.loop = true
+    audio.volume = 0.3
+    audio.play().catch(() => {})
+    musicRef.current = audio
+    currentMoodRef.current = mood
+  }
 
   async function checkDmBusy() {
     const { data } = await supabase
@@ -159,6 +234,7 @@ export default function Game() {
         const lastMsg = newMessages[newMessages.length - 1]
         if (lastMsg.role === 'dm' && prev.length < newMessages.length) {
           speakText(lastMsg.text, mutedRef.current, currentAudioRef)
+          playMusic(detectMood(lastMsg.text))
         }
         return newMessages
       })
@@ -208,7 +284,10 @@ export default function Game() {
       (payload) => {
         const msg = payload.new
         addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
-        if (msg.role === 'dm') speakText(msg.content, mutedRef.current, currentAudioRef)
+        if (msg.role === 'dm') {
+          speakText(msg.content, mutedRef.current, currentAudioRef)
+          playMusic(detectMood(msg.content))
+        }
         if (msg.role === 'player') loadPlayers()
       }
     )
@@ -412,6 +491,21 @@ export default function Game() {
             borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
           }}>
             {muted ? '🔇' : '🔊'}
+          </button>
+          <button onClick={() => {
+            const newMuted = !musicMutedRef.current
+            musicMutedRef.current = newMuted
+            setMusicMuted(newMuted)
+            if (newMuted && musicRef.current) {
+              musicRef.current.pause()
+            } else if (!newMuted && musicRef.current) {
+              musicRef.current.play()
+            }
+          }} style={{
+            background: 'none', border: '1px solid var(--border)',
+            borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 10px', fontSize: '14px'
+          }}>
+            {musicMuted ? '🔕' : '🎵'}
           </button>
           {roomCode && (
             <button onClick={() => setShowRoomCode(!showRoomCode)} style={{
