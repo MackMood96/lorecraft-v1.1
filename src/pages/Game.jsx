@@ -45,55 +45,62 @@ function detectMood(text) {
   return 'exploration'
 }
 
-async function speakText(text, muted, audioRef, mutedRef) {
+async function speakText(text, muted, audioRef, mutedRef, setTtsStatus) {
   if (muted) return
   const clean = text.replace(/<[^>]+>/g, '').trim()
   if (!clean) return
 
-  // Wait for Puter to fully initialize AND authenticate
+  // Wait for puter.ai to be available
   let attempts = 0
-  while ((!window.puter?.ai || !window.puter?.auth?.isLoggedIn?.()) && attempts < 40) {
+  while (!window.puter?.ai && attempts < 20) {
     await new Promise(r => setTimeout(r, 500))
     attempts++
   }
   if (!window.puter?.ai) {
     console.log('Puter not available')
+    setTtsStatus?.('error')
     return
   }
+
+  setTtsStatus?.('loading')
 
   try {
     const segments = clean.split(/(".*?")/gs).filter(s => s.trim())
 
-    // Load all segments simultaneously
-    const audioPromises = segments.map(segment => {
-      const isDialogue = segment.trim().startsWith('"')
-      return window.puter.ai.txt2speech(segment.trim(), {
-        provider: 'gemini',
-        model: 'gemini-2.5-flash-preview-tts',
-        voice: 'Charon',
-        instructions: isDialogue
-          ? 'Speak in character as the NPC — match their personality, gruff for villains, warm for merchants, mysterious for mages.'
-          : 'Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. Slightly faster pace, clear diction, dramatic pauses only at key moments.'
-      })
+    const getTTS = (segment) => window.puter.ai.txt2speech(segment.trim(), {
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-preview-tts',
+      voice: 'Charon',
+      instructions: segment.trim().startsWith('"')
+        ? 'Speak in character as the NPC — match their personality, gruff for villains, warm for merchants, mysterious for mages.'
+        : 'Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. Slightly faster pace, clear diction, dramatic pauses only at key moments.'
     })
 
-    // Wait for all segments to load
-    const audios = await Promise.all(audioPromises)
+    // Load first segment
+    let currentAudio = await getTTS(segments[0])
+    if (audioRef) audioRef.current = currentAudio
 
-    // Store first audio in ref for mute control
-    if (audioRef) audioRef.current = audios[0]
+    setTtsStatus?.('playing')
 
-    // Play sequentially
-    for (const audio of audios) {
+    for (let i = 0; i < segments.length; i++) {
       if (mutedRef?.current) break
+
+      // Start loading next segment while current plays
+      const nextPromise = i + 1 < segments.length ? getTTS(segments[i + 1]) : null
+
       await new Promise((resolve, reject) => {
-        audio.addEventListener('ended', resolve)
-        audio.addEventListener('error', reject)
-        audio.play()
+        currentAudio.addEventListener('ended', resolve)
+        currentAudio.addEventListener('error', reject)
+        currentAudio.play()
       })
+
+      if (nextPromise) currentAudio = await nextPromise
     }
+
+    setTtsStatus?.('idle')
   } catch (e) {
     console.log('TTS error:', e)
+    setTtsStatus?.('error')
   }
 }
 
@@ -126,6 +133,7 @@ export default function Game() {
   const [playerAvatars, setPlayerAvatars] = useState({})
   const [muted, setMuted] = useState(false)
   const [musicMuted, setMusicMuted] = useState(false)
+  const [ttsStatus, setTtsStatus] = useState('idle')
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const hasStarted = useRef(false)
@@ -137,6 +145,7 @@ export default function Game() {
   const musicRef = useRef(null)
   const currentMoodRef = useRef(null)
   const musicMutedRef = useRef(false)
+  const puterReadyRef = useRef(false)
 
   useEffect(() => { mutedRef.current = muted }, [muted])
   useEffect(() => { musicMutedRef.current = musicMuted }, [musicMuted])
@@ -157,6 +166,25 @@ export default function Game() {
     loadPlayerAvatars()
     checkDmBusy()
 
+    // Warm up Puter TTS after 3 seconds so it's ready when DM speaks
+    const warmupTimer = setTimeout(async () => {
+      try {
+        if (window.puter?.ai) {
+          console.log('Warming up Puter TTS...')
+          await window.puter.ai.txt2speech(' ', {
+            provider: 'gemini',
+            model: 'gemini-2.5-flash-preview-tts',
+            voice: 'Charon',
+            instructions: 'Say nothing.'
+          })
+          puterReadyRef.current = true
+          console.log('Puter TTS ready!')
+        }
+      } catch (e) {
+        console.log('Puter warmup failed:', e)
+      }
+    }, 3000)
+
     const poll = setInterval(() => {
       loadMessages()
       checkDmBusy()
@@ -165,6 +193,7 @@ export default function Game() {
     return () => {
       cleanup()
       clearInterval(poll)
+      clearTimeout(warmupTimer)
       if (musicRef.current) {
         musicRef.current.pause()
         musicRef.current = null
@@ -233,7 +262,7 @@ export default function Game() {
         const newMessages = data.map(m => ({ role: m.role, text: m.content, playerName: m.player_name }))
         const lastMsg = newMessages[newMessages.length - 1]
         if (lastMsg.role === 'dm' && prev.length < newMessages.length) {
-          speakText(lastMsg.text, mutedRef.current, currentAudioRef, mutedRef)
+          speakText(lastMsg.text, mutedRef.current, currentAudioRef, mutedRef, setTtsStatus)
           playMusic(detectMood(lastMsg.text))
         }
         return newMessages
@@ -285,7 +314,7 @@ export default function Game() {
         const msg = payload.new
         addMessage({ role: msg.role, text: msg.content, playerName: msg.player_name })
         if (msg.role === 'dm') {
-          speakText(msg.content, mutedRef.current, currentAudioRef, mutedRef)
+          speakText(msg.content, mutedRef.current, currentAudioRef, mutedRef, setTtsStatus)
           playMusic(detectMood(msg.content))
         }
         if (msg.role === 'player') loadPlayers()
@@ -477,7 +506,21 @@ export default function Game() {
         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', letterSpacing: '2px' }}>
           LORECRAFT
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+
+          {/* TTS Status Indicator */}
+          <div style={{
+            fontSize: '9px',
+            fontFamily: "'Cinzel', serif",
+            letterSpacing: '1px',
+            color: ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : ttsStatus === 'error' ? '#c0392b' : 'var(--text-dim)',
+            padding: '3px 8px',
+            border: `1px solid ${ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : ttsStatus === 'error' ? '#c0392b' : 'var(--border)'}`,
+            borderRadius: '4px'
+          }}>
+            {ttsStatus === 'playing' ? '🔊 PLAYING' : ttsStatus === 'loading' ? '⏳ LOADING' : ttsStatus === 'error' ? '❌ ERROR' : '💤 IDLE'}
+          </div>
+
           <button onClick={() => {
             const newMuted = !mutedRef.current
             mutedRef.current = newMuted
