@@ -50,9 +50,9 @@ async function speakText(text, muted, audioRef) {
   const clean = text.replace(/<[^>]+>/g, '').trim()
   if (!clean) return
 
-  // Wait for Puter to fully initialize
+  // Wait for Puter to fully initialize AND authenticate
   let attempts = 0
-  while ((!window.puter || !window.puter.ai) && attempts < 20) {
+  while ((!window.puter?.ai || !window.puter?.auth?.isLoggedIn?.()) && attempts < 40) {
     await new Promise(r => setTimeout(r, 500))
     attempts++
   }
