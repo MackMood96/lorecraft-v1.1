@@ -26,14 +26,28 @@ RULES:
 - End with suggested actions in *italics* ONLY for complex responses.
 - Track player HP. If they take damage, tell them.
 
-NPC VOICE ASSIGNMENT — CRITICAL:
-- The FIRST time an NPC appears, you MUST include a voice tag at the end of your response.
-- Format: <npc_voice>{"name":"NpcName","gender":"male|female","voice":"VoiceName"}</npc_voice>
+DIALOGUE FORMATTING — CRITICAL:
+- NPC dialogue MUST always be on its own separate paragraph, never mixed with narration.
+- Narration describing the NPC goes in the paragraph BEFORE or AFTER the dialogue paragraph.
+- CORRECT format example:
+  The old dwarf steps forward, his eyes narrowing with suspicion.
+
+  Gorin: "State your business, traveller. We don't take kindly to strangers here."
+
+  His hand rests on the hilt of his axe.
+- NEVER put narration and NPC dialogue on the same paragraph.
+
+NPC DATA — CRITICAL:
+- The FIRST time an NPC appears, include a data tag at the END of your response.
+- Format: <npc_data>{"name":"NpcName","gender":"male|female","voice":"VoiceName","race":"Race","role":"Role","description":"physical appearance and personality in one sentence"}</npc_data>
 - Male NPC voices: Fenrir (warrior/villain), Orus (merchant/elder), Achird (mysterious/mage)
 - Female NPC voices: Kore (mysterious/mage), Aoede (noble/elf), Leda (warrior/ranger)
-- Choose the voice that best fits the NPC's personality and role.
-- When an NPC speaks, format their dialogue as: NpcName: "their words here"
-- Only one NPC voice tag per response.
+- Choose voice that best fits personality and role.
+- When an NPC speaks, format as: NpcName: "their words here"
+- Only one NPC data tag per response. Never repeat for the same NPC.
+
+KNOWN NPCS IN THIS CAMPAIGN:
+{{NPC_ROSTER}}
 
 When HP or gold changes, include at the END of your response:
 <state_update>
@@ -83,67 +97,64 @@ function pcmToWav(base64Pcm) {
   return new Blob([wav], { type: 'audio/wav' })
 }
 
-// ─── PARSE NPC VOICE TAG ─────────────────────────────────────────────────────
-function parseNpcVoice(text) {
-  const match = text.match(/<npc_voice>([\s\S]*?)<\/npc_voice>/)
+// ─── PARSE NPC DATA TAG ──────────────────────────────────────────────────────
+function parseNpcData(text) {
+  const match = text.match(/<npc_data>([\s\S]*?)<\/npc_data>/)
   if (!match) return null
   try { return JSON.parse(match[1].trim()) } catch { return null }
 }
 
 // ─── DETECT NPC IN PARAGRAPH ─────────────────────────────────────────────────
-// Returns { npcName, npcVoice } if paragraph contains NPC dialogue, else null
-function detectNpcInParagraph(paragraph, npcVoices) {
-  for (const [name, voice] of Object.entries(npcVoices)) {
-    // Look for "NpcName: " pattern indicating NPC is speaking
-    if (paragraph.includes(`${name}:`)) {
-      return { npcName: name, npcVoice: voice }
+// Since dialogue is always its own paragraph, just check if paragraph starts with NpcName:
+function detectNpcInParagraph(paragraph, npcData) {
+  for (const [name, data] of Object.entries(npcData)) {
+    if (paragraph.trim().startsWith(`${name}:`)) {
+      return { npcName: name, npcVoice: data.voice || data }
     }
   }
   return null
 }
 
 // ─── GENERATE TTS FOR ONE PARAGRAPH ─────────────────────────────────────────
-async function generateParagraphTTS(paragraph, npcVoices) {
-  const npc = detectNpcInParagraph(paragraph, npcVoices)
+async function generateParagraphTTS(paragraph, npcData) {
+  const npc = detectNpcInParagraph(paragraph, npcData)
 
   let body
+
   if (npc) {
-    // Multi-speaker: Narrator + NPC
-    const script = paragraph
-      .replace(new RegExp(`${npc.npcName}:\\s*"`, 'g'), `${npc.npcName}: "`)
+    // Pure NPC dialogue paragraph — multi-speaker with Narrator + NPC
     body = {
-      contents: [{ parts: [{ text: script }] }],
+      contents: [{ parts: [{ text: `Narrator: \nNPC: ${paragraph.replace(`${npc.npcName}:`, '').trim()}` }] }],
       generationConfig: {
         responseModalities: ['AUDIO'],
         speechConfig: {
           multiSpeakerVoiceConfig: {
             speakerVoiceConfigs: [
               { speaker: 'Narrator', voiceConfig: { prebuiltVoiceConfig: { voiceName: NARRATOR_VOICE } } },
-              { speaker: npc.npcName, voiceConfig: { prebuiltVoiceConfig: { voiceName: npc.npcVoice } } }
+              { speaker: 'NPC', voiceConfig: { prebuiltVoiceConfig: { voiceName: npc.npcVoice } } }
             ]
           }
         }
       }
     }
-    // Prefix lines with speaker labels for multi-speaker
-    const lines = paragraph.split('\n').map(line => {
-      if (line.includes(`${npc.npcName}:`)) return line
-      return `Narrator: ${line}`
-    })
-    body.contents[0].parts[0].text = lines.join('\n')
-  } else {
-    // Single speaker: Narrator only
+    // Actually just speak as NPC directly — single speaker with NPC voice
     body = {
-      contents: [{ parts: [{ text: `Narrator: ${paragraph}` }] }],
+      contents: [{ parts: [{ text: paragraph.replace(`${npc.npcName}:`, '').trim() }] }],
       generationConfig: {
         responseModalities: ['AUDIO'],
         speechConfig: {
-          multiSpeakerVoiceConfig: {
-            speakerVoiceConfigs: [
-              { speaker: 'Narrator', voiceConfig: { prebuiltVoiceConfig: { voiceName: NARRATOR_VOICE } } },
-              { speaker: 'NPC', voiceConfig: { prebuiltVoiceConfig: { voiceName: MALE_VOICES[0] } } }
-            ]
-          }
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: npc.npcVoice } }
+        }
+      }
+    }
+  } else {
+    // Pure narration paragraph — single speaker Charon with British narrator instruction
+    body = {
+      contents: [{ parts: [{ text: `Read this like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. British accent: ${paragraph}` }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: NARRATOR_VOICE } }
         }
       }
     }
@@ -159,7 +170,7 @@ async function generateParagraphTTS(paragraph, npcVoices) {
   )
   const data = await response.json()
   if (data.error) throw new Error(data.error.message)
-  return data.candidates[0].content.parts[0].inlineData.data // base64 PCM
+  return data.candidates[0].content.parts[0].inlineData.data
 }
 
 // ─── PARSE HELPERS ───────────────────────────────────────────────────────────
@@ -172,7 +183,7 @@ function parseStateUpdate(text) {
 function cleanText(text) {
   return text
     .replace(/<state_update>[\s\S]*?<\/state_update>/g, '')
-    .replace(/<npc_voice>[\s\S]*?<\/npc_voice>/g, '')
+    .replace(/<npc_data>[\s\S]*?<\/npc_data>/g, '')
     .trim()
 }
 
@@ -183,6 +194,15 @@ function playBase64Audio(base64Pcm, audioRef) {
   const audio = new Audio(url)
   if (audioRef) audioRef.current = audio
   return audio
+}
+
+// ─── BUILD NPC ROSTER STRING FOR SYSTEM PROMPT ───────────────────────────────
+function buildNpcRoster(npcData) {
+  const npcs = Object.values(npcData)
+  if (npcs.length === 0) return 'None yet.'
+  return npcs.map(n =>
+    `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`
+  ).join('\n')
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
@@ -206,7 +226,7 @@ export default function Game() {
   const [muted, setMuted] = useState(false)
   const [musicMuted, setMusicMuted] = useState(false)
   const [ttsStatus, setTtsStatus] = useState('idle')
-  const [npcVoices, setNpcVoices] = useState({}) // { "Grukk": "Fenrir", "Lyra": "Kore" }
+  const [npcData, setNpcData] = useState({})
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -219,12 +239,12 @@ export default function Game() {
   const musicRef = useRef(null)
   const currentMoodRef = useRef(null)
   const musicMutedRef = useRef(false)
-  const npcVoicesRef = useRef({})
+  const npcDataRef = useRef({})
   const audioChannelRef = useRef(null)
 
   useEffect(() => { mutedRef.current = muted }, [muted])
   useEffect(() => { musicMutedRef.current = musicMuted }, [musicMuted])
-  useEffect(() => { npcVoicesRef.current = npcVoices }, [npcVoices])
+  useEffect(() => { npcDataRef.current = npcData }, [npcData])
 
   useEffect(() => {
     if (messages.length > prevMessageCount.current) {
@@ -237,7 +257,7 @@ export default function Game() {
   useEffect(() => {
     if (!campaignId) return
     loadMessages()
-    loadNpcVoices()
+    loadNpcData()
     const cleanupMessages = subscribeToMessages()
     const cleanupAudio = subscribeToAudio()
     subscribeToPresence()
@@ -269,36 +289,34 @@ export default function Game() {
     }
   }, [player, messages.length])
 
-  // ─── LOAD NPC VOICES FROM SUPABASE ───────────────────────────────────────
-  async function loadNpcVoices() {
+  // ─── LOAD NPC DATA FROM SUPABASE ─────────────────────────────────────────
+  async function loadNpcData() {
     const { data } = await supabase
       .from('campaigns')
       .select('npc_voices')
       .eq('id', campaignId)
       .single()
     if (data?.npc_voices) {
-      setNpcVoices(data.npc_voices)
-      npcVoicesRef.current = data.npc_voices
+      setNpcData(data.npc_voices)
+      npcDataRef.current = data.npc_voices
     }
   }
 
-  // ─── SAVE NPC VOICES TO SUPABASE ─────────────────────────────────────────
-  async function saveNpcVoices(voices) {
+  // ─── SAVE NPC DATA TO SUPABASE ────────────────────────────────────────────
+  async function saveNpcData(data) {
     await supabase
       .from('campaigns')
-      .update({ npc_voices: voices })
+      .update({ npc_voices: data })
       .eq('id', campaignId)
   }
 
   // ─── AUDIO REALTIME CHANNEL ───────────────────────────────────────────────
-  // Host broadcasts base64 audio chunks, non-hosts receive and play
   function subscribeToAudio() {
     const channel = supabase.channel(`audio:${campaignId}`, {
       config: { broadcast: { self: false } }
     })
 
     if (!isHost) {
-      // Non-hosts listen for audio chunks from host
       const audioQueue = []
       let isPlaying = false
 
@@ -348,32 +366,19 @@ export default function Game() {
     const clean = text.replace(/<[^>]+>/g, '').trim()
     if (!clean) return
 
-    // Split into paragraphs
     const paragraphs = clean.split(/\n+/).filter(p => p.trim().length > 0)
     const chunks = paragraphs.length > 0 ? paragraphs : [clean]
 
-    // Signal start to non-hosts
-    audioChannelRef.current?.send({
-      type: 'broadcast',
-      event: 'audio_start',
-      payload: {}
-    })
-
+    audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
     setTtsStatus('loading')
 
     try {
-      // Generate first chunk
-      let currentBase64 = await generateParagraphTTS(chunks[0], npcVoicesRef.current)
+      let currentBase64 = await generateParagraphTTS(chunks[0], npcDataRef.current)
 
-      // Play first chunk on host + broadcast to non-hosts
       const broadcastAndPlay = async (base64Pcm) => {
-        // Broadcast to non-hosts
         audioChannelRef.current?.send({
-          type: 'broadcast',
-          event: 'audio_chunk',
-          payload: { base64Pcm }
+          type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm }
         })
-        // Play on host
         const audio = playBase64Audio(base64Pcm, currentAudioRef)
         setTtsStatus('playing')
         await new Promise((resolve, reject) => {
@@ -385,14 +390,10 @@ export default function Game() {
 
       for (let i = 0; i < chunks.length; i++) {
         if (mutedRef.current) break
-
-        // Preload next chunk while current plays
         const nextPromise = i + 1 < chunks.length
-          ? generateParagraphTTS(chunks[i + 1], npcVoicesRef.current)
+          ? generateParagraphTTS(chunks[i + 1], npcDataRef.current)
           : null
-
         await broadcastAndPlay(currentBase64)
-
         if (nextPromise) currentBase64 = await nextPromise
       }
 
@@ -402,12 +403,7 @@ export default function Game() {
       setTtsStatus('error')
     }
 
-    // Signal end to non-hosts
-    audioChannelRef.current?.send({
-      type: 'broadcast',
-      event: 'audio_end',
-      payload: {}
-    })
+    audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
   }
 
   // ─── MUSIC ───────────────────────────────────────────────────────────────
@@ -570,21 +566,19 @@ export default function Game() {
 
     const hasMention = userMessage && userMessage.includes('@')
 
+    // Build system prompt with NPC roster injected
+    const npcRoster = buildNpcRoster(npcDataRef.current)
+    const systemContent = SYSTEM_PROMPT.replace('{{NPC_ROSTER}}', npcRoster) +
+      `\n\nPlayers in this campaign: ${players.length > 0 ? players.join(', ') : player?.name}. ` +
+      `Acting player: ${player?.name} the ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}.` +
+      (hasMention ? '\n\nCRITICAL: This message contains an @mention. ONE sentence only. Stop immediately after.' : '')
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: SYSTEM_PROMPT +
-              `\n\nPlayers in this campaign: ${players.length > 0 ? players.join(', ') : player?.name}. ` +
-              `Acting player: ${player?.name} the ${player?.class}, HP: ${gameState.hp}/${gameState.maxHp}, Gold: ${gameState.gold}.` +
-              (hasMention ? '\n\nCRITICAL: This message contains an @mention. ONE sentence only. Stop immediately after.' : '')
-          },
-          ...history
-        ],
+        messages: [{ role: 'system', content: systemContent }, ...history],
         max_tokens: 1000
       })
     })
@@ -594,20 +588,18 @@ export default function Game() {
 
   // ─── HANDLE DM RESPONSE ───────────────────────────────────────────────────
   async function processDmResponse(raw) {
-    // Parse NPC voice assignment
-    const npcVoice = parseNpcVoice(raw)
-    if (npcVoice && npcVoice.name && npcVoice.voice) {
-      const updated = { ...npcVoicesRef.current, [npcVoice.name]: npcVoice.voice }
-      setNpcVoices(updated)
-      npcVoicesRef.current = updated
-      await saveNpcVoices(updated)
+    // Parse NPC data tag — save full NPC object including description
+    const npc = parseNpcData(raw)
+    if (npc && npc.name && npc.voice) {
+      const updated = { ...npcDataRef.current, [npc.name]: npc }
+      setNpcData(updated)
+      npcDataRef.current = updated
+      await saveNpcData(updated)
     }
 
-    // Parse state update
     const stateUpdate = parseStateUpdate(raw)
     if (stateUpdate) updateGameState(stateUpdate)
 
-    // Clean text and save
     const clean = cleanText(raw)
     await saveMessage('dm', clean)
   }
