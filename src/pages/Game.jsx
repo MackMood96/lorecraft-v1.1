@@ -29,8 +29,15 @@ function detectSceneFromText(text) {
   if (lower.includes('inn') || lower.includes('rest') || lower.includes('sleep')) return 'inn'
   return null
 }
+
 function buildSceneUrl(prompt, seed) {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=800&height=500&nologo=true&seed=${seed}&model=flux`
+}
+
+function buildNpcSceneUrl(npc, sceneName) {
+  const envPrompt = SCENE_KEYWORDS[sceneName] || SCENE_KEYWORDS.exploration
+  const npcPrompt = `2D pixel art RPG character portrait, 16-bit style, ${npc.description || `${npc.race} ${npc.role}`}, ${envPrompt}, character visible, game art style`
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(npcPrompt)}?width=800&height=500&nologo=true&seed=${npc.seed || Math.floor(Math.random() * 9999)}&model=flux`
 }
 
 // ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
@@ -252,7 +259,6 @@ function FloatingWindow({ title, icon, children, zIndex, onFocus, win, accentCol
       boxShadow: `0 8px 40px rgba(0,0,0,0.8), 0 0 0 1px ${accentColor}22`,
       userSelect: 'none',
     }}>
-      {/* Title Bar */}
       <div onMouseDown={startDrag} style={{
         padding: '7px 10px',
         background: 'linear-gradient(135deg, rgba(20,15,35,0.98), rgba(12,8,22,0.98))',
@@ -288,7 +294,6 @@ export default function Game() {
   const isHost = searchParams.get('host') === 'true'
   const { player, gameState, updateGameState, messages, addMessage, setMessages } = useGame()
 
-  // ─── DEVICE DETECTION ──────────────────────────────────────────────────
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   useEffect(() => {
     const handle = () => setIsMobile(window.innerWidth < 768)
@@ -296,28 +301,21 @@ export default function Game() {
     return () => window.removeEventListener('resize', handle)
   }, [])
 
-  // ─── SCENE STATE ────────────────────────────────────────────────────────
   const [sceneUrl, setSceneUrl] = useState('')
   const [sceneLoading, setSceneLoading] = useState(false)
   const [sceneLabel, setSceneLabel] = useState('Adventure Begins')
-  const [showScene, setShowScene] = useState(true)
   const currentSceneRef = useRef('exploration')
   const sceneSeedRef = useRef(Math.floor(Math.random() * 9999))
-
-  // ─── WINDOW TOGGLES (mobile) ────────────────────────────────────────────
   const [mobileSceneVisible, setMobileSceneVisible] = useState(true)
 
-  // ─── DESKTOP WINDOW STATE ───────────────────────────────────────────────
   const sceneWin = useFloatingWindow({ x: 20, y: 60 }, { w: 520, h: 400 })
   const chatWin = useFloatingWindow({ x: 560, y: 60 }, { w: 500, h: 600 })
   const [zOrders, setZOrders] = useState({ scene: 10, chat: 11 })
-
   const focusWindow = (name) => {
     const max = Math.max(...Object.values(zOrders))
     setZOrders(z => ({ ...z, [name]: max + 1 }))
   }
 
-  // ─── GAME STATE ─────────────────────────────────────────────────────────
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showInventory, setShowInventory] = useState(false)
@@ -358,7 +356,6 @@ export default function Game() {
     prevMessageCount.current = messages.length
   }, [messages])
 
-  // ─── SCENE GENERATION ───────────────────────────────────────────────────
   const loadScene = useCallback((sceneName, label, seed) => {
     const prompt = SCENE_KEYWORDS[sceneName] || SCENE_KEYWORDS.exploration
     const useSeed = seed || sceneSeedRef.current
@@ -371,7 +368,6 @@ export default function Game() {
   const loadNpcScene = useCallback((npc) => {
     setSceneLoading(true)
     setSceneLabel(npc.name)
-    const seed = npc.seed || Math.floor(Math.random() * 9999)
     setSceneUrl(buildNpcSceneUrl(npc, currentSceneRef.current))
   }, [])
 
@@ -380,10 +376,8 @@ export default function Game() {
     loadScene(currentSceneRef.current, sceneLabel)
   }
 
-  // Load initial scene
   useEffect(() => { loadScene('exploration', 'Adventure Begins') }, [])
 
-  // ─── INIT ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!campaignId) return
     loadMessages()
@@ -593,7 +587,8 @@ export default function Game() {
       body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 1000 })
     })
     const data = await response.json()
-    return data.choices?.[0]?.message?.content || 'The dungeon stirs...'
+    if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
+    return data.choices[0].message.content
   }
 
   async function processDmResponse(raw) {
@@ -603,7 +598,6 @@ export default function Game() {
       const updated = { ...npcDataRef.current, [npc.name]: { ...npc, seed } }
       setNpcData(updated); npcDataRef.current = updated
       await saveNpcData(updated)
-      // Show NPC scene when new NPC appears
       loadNpcScene({ ...npc, seed })
     }
     const stateUpdate = parseStateUpdate(raw)
@@ -619,6 +613,7 @@ export default function Game() {
     while (attempts < 3) {
       try { const raw = await callDM(null); await processDmResponse(raw); break }
       catch (e) {
+        console.log('DM error:', e)
         attempts++
         if (attempts < 3) await new Promise(r => setTimeout(r, 5000))
         else await saveMessage('dm', 'The ancient magic stirs... try sending a message to begin your adventure.')
@@ -632,8 +627,13 @@ export default function Game() {
     const userMsg = input.trim(); setInput('')
     await saveMessage('player', userMsg, player?.name)
     await setDmBusyState(true); setLoading(true)
-    try { const raw = await callDM(userMsg); await processDmResponse(raw) }
-    catch { await saveMessage('dm', 'The magic falters...') }
+    try {
+      const raw = await callDM(userMsg)
+      await processDmResponse(raw)
+    } catch (e) {
+      console.log('Send message error:', e)
+      await saveMessage('dm', 'The dungeon stirs... something went wrong. Try again.')
+    }
     await setDmBusyState(false); setLoading(false)
   }
 
@@ -642,7 +642,6 @@ export default function Game() {
   const hpPct = Math.max(0, (gameState.hp / gameState.maxHp) * 100)
   const hpColor = hpPct > 50 ? '#27ae60' : hpPct > 25 ? '#f39c12' : '#c0392b'
 
-  // ─── SCENE PANEL (shared between mobile/desktop) ──────────────────────
   const SceneContent = (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0806' }}>
       {sceneLoading && (
@@ -669,11 +668,8 @@ export default function Game() {
     </div>
   )
 
-  // ─── CHAT PANEL (shared between mobile/desktop) ───────────────────────
   const ChatContent = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
-
-      {/* Stats bar */}
       <div style={{ padding: '6px 12px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--text-dim)' }}>{player?.name} · {player?.class}</span>
         <div style={{ flex: 1, height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
@@ -689,7 +685,6 @@ export default function Game() {
         </div>
       )}
 
-      {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {messages.map((msg, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
@@ -737,7 +732,6 @@ export default function Game() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Actions */}
       <div style={{ display: 'flex', gap: '5px', padding: '0 10px 6px', overflowX: 'auto', flexShrink: 0 }}>
         {['👁 Look Around', '⚔️ Attack', '🌑 Sneak', '🔍 Search', '💬 Talk', '💨 Flee'].map(action => (
           <button key={action} onClick={() => quickAction(action.split(' ').slice(1).join(' '))}
@@ -747,7 +741,6 @@ export default function Game() {
         ))}
       </div>
 
-      {/* @ Mention Dropdown */}
       {mentionSearch !== null && filteredPlayers.length > 0 && (
         <div style={{ position: 'absolute', bottom: '70px', left: '10px', background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '8px', overflow: 'hidden', zIndex: 50, boxShadow: '0 0 20px rgba(201,168,76,0.2)' }}>
           {filteredPlayers.map(p => (
@@ -758,7 +751,6 @@ export default function Game() {
         </div>
       )}
 
-      {/* Input */}
       <div style={{ padding: '8px 10px 12px', background: 'rgba(10,8,18,0.98)', borderTop: '1px solid var(--border)', display: 'flex', gap: '7px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
         <textarea ref={inputRef} value={input}
           onChange={e => handleInput(e.target.value)}
@@ -772,14 +764,9 @@ export default function Game() {
     </div>
   )
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
-
-  // ── MOBILE LAYOUT ──
   if (isMobile) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', position: 'relative' }}>
-
-        {/* Mobile Header */}
         <div style={{ padding: '8px 12px', background: 'rgba(10,8,18,0.95)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '14px', color: 'var(--gold)', letterSpacing: '2px' }}>LORECRAFT</div>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -794,7 +781,6 @@ export default function Game() {
           </div>
         </div>
 
-        {/* Room Code Banner */}
         {showRoomCode && roomCode && (
           <div style={{ background: 'linear-gradient(135deg, #1e1830, #2a2045)', borderBottom: '1px solid var(--border)', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div>
@@ -805,19 +791,16 @@ export default function Game() {
           </div>
         )}
 
-        {/* Mobile Scene Panel */}
         {mobileSceneVisible && (
           <div style={{ height: '38%', flexShrink: 0, borderBottom: '1px solid var(--border)', position: 'relative' }}>
             {SceneContent}
           </div>
         )}
 
-        {/* Mobile Chat */}
         <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
           {ChatContent}
         </div>
 
-        {/* Inventory Modal */}
         {showInventory && (
           <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'flex-end', zIndex: 100 }}>
             <div onClick={e => e.stopPropagation()} style={{ width: '100%', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: '20px 20px 0 0', padding: '20px 24px 40px' }}>
@@ -837,40 +820,29 @@ export default function Game() {
     )
   }
 
-  // ── DESKTOP LAYOUT ──
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#050408', backgroundImage: 'radial-gradient(ellipse at 20% 50%, rgba(30,15,60,0.3) 0%, transparent 60%)', overflow: 'hidden', position: 'relative', fontFamily: 'Georgia, serif' }}>
-
-      {/* Desktop grid bg */}
       <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(201,168,76,0.02) 40px,rgba(201,168,76,0.02) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(201,168,76,0.02) 40px,rgba(201,168,76,0.02) 41px)', pointerEvents: 'none' }} />
 
-      {/* ── SCENE FLOATING WINDOW ── */}
       <FloatingWindow title={sceneLabel.toUpperCase()} icon="🖼" zIndex={zOrders.scene} onFocus={() => focusWindow('scene')} win={sceneWin} accentColor="#c9a84c">
         {SceneContent}
       </FloatingWindow>
 
-      {/* ── CHAT FLOATING WINDOW ── */}
       <FloatingWindow title="DUNGEON MASTER" icon="⚔" zIndex={zOrders.chat} onFocus={() => focusWindow('chat')} win={chatWin} accentColor="#27ae60">
         {ChatContent}
       </FloatingWindow>
 
-      {/* ── TASKBAR ── */}
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '42px', background: 'rgba(5,3,10,0.98)', borderTop: '1px solid rgba(201,168,76,0.15)', display: 'flex', alignItems: 'center', padding: '0 14px', gap: '8px', zIndex: 1000 }}>
         <div style={{ color: '#c9a84c', fontSize: '11px', letterSpacing: '3px', fontFamily: "'Cinzel', serif", marginRight: '10px' }}>⚔ LORECRAFT</div>
-
-        {/* Window toggles */}
         {[
           { key: 'scene', icon: '🖼', label: 'SCENE', w: sceneWin, accent: '#c9a84c' },
           { key: 'chat', icon: '⚔', label: 'CHAT', w: chatWin, accent: '#27ae60' },
         ].map(({ key, icon, label, w, accent }) => (
           <button key={key} onClick={() => { w.toggleMinimize(); focusWindow(key) }} style={{ padding: '4px 12px', fontSize: '9px', letterSpacing: '2px', background: w.minimized ? 'rgba(255,255,255,0.03)' : `${accent}22`, border: `1px solid ${w.minimized ? '#2a2a2a' : accent + '66'}`, borderRadius: '4px', color: w.minimized ? '#4a4a4a' : accent, cursor: 'pointer', fontFamily: "'Cinzel', serif" }}>{icon} {label}</button>
         ))}
-
-        {/* TTS Status */}
         <div style={{ fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '1px', color: ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? '#c9a84c' : ttsStatus === 'error' ? '#c0392b' : '#3a3a3a', padding: '3px 8px', border: `1px solid ${ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? '#c9a84c' : ttsStatus === 'error' ? '#c0392b' : '#2a2a2a'}`, borderRadius: '4px' }}>
           {ttsStatus === 'playing' ? '🔊 PLAYING' : ttsStatus === 'loading' ? '⏳ LOADING' : ttsStatus === 'error' ? '❌ ERROR' : '💤 IDLE'}
         </div>
-
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
           {roomCode && <button onClick={() => setShowRoomCode(!showRoomCode)} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 10px', fontSize: '10px', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>🔗 {roomCode}</button>}
           <button onClick={() => setShowInventory(true)} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>🎒</button>
@@ -879,7 +851,6 @@ export default function Game() {
         </div>
       </div>
 
-      {/* Room Code Banner */}
       {showRoomCode && roomCode && (
         <div style={{ position: 'fixed', top: '60px', left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #1e1830, #2a2045)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: '20px', zIndex: 2000, boxShadow: '0 8px 40px rgba(0,0,0,0.8)' }}>
           <div>
@@ -891,7 +862,6 @@ export default function Game() {
         </div>
       )}
 
-      {/* Inventory Modal */}
       {showInventory && (
         <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: '340px', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px' }}>
