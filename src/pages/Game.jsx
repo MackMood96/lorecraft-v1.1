@@ -145,6 +145,11 @@ function detectNpcInParagraph(paragraph, npcData) {
   return null
 }
 
+// ─── TTS: generate all chunks in parallel, play in order ─────────────────────
+async function generateAllTTS(chunks, npcData) {
+  return Promise.all(chunks.map(chunk => generateParagraphTTS(chunk, npcData)))
+}
+
 async function generateParagraphTTS(paragraph, npcData) {
   const npc = detectNpcInParagraph(paragraph, npcData)
   let body
@@ -203,89 +208,6 @@ function buildNpcRoster(npcData) {
   ).join('\n')
 }
 
-// ─── DRAGGABLE WINDOW HOOK ───────────────────────────────────────────────────
-function useFloatingWindow(initialPos, initialSize) {
-  const [pos, setPos] = useState(initialPos)
-  const [size, setSize] = useState(initialSize)
-  const [minimized, setMinimized] = useState(false)
-  const [maximized, setMaximized] = useState(false)
-  const prevRef = useRef(null)
-
-  const startDrag = useCallback((e) => {
-    if (maximized || e.button !== 0) return
-    e.preventDefault()
-    const ox = e.clientX - pos.x
-    const oy = e.clientY - pos.y
-    const onMove = (e) => setPos({ x: Math.max(0, e.clientX - ox), y: Math.max(0, e.clientY - oy) })
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [pos, maximized])
-
-  const startResize = useCallback((e) => {
-    e.preventDefault(); e.stopPropagation()
-    const sx = e.clientX, sy = e.clientY, sw = size.w, sh = size.h
-    const onMove = (e) => setSize({ w: Math.max(300, sw + e.clientX - sx), h: Math.max(200, sh + e.clientY - sy) })
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [size])
-
-  const toggleMaximize = useCallback(() => {
-    if (maximized) { setPos(prevRef.current.pos); setSize(prevRef.current.size); setMaximized(false) }
-    else { prevRef.current = { pos, size }; setMaximized(true) }
-  }, [maximized, pos, size])
-
-  const toggleMinimize = useCallback(() => setMinimized(m => !m), [])
-
-  return { pos, size, minimized, maximized, startDrag, startResize, toggleMaximize, toggleMinimize }
-}
-
-// ─── FLOATING WINDOW COMPONENT ───────────────────────────────────────────────
-function FloatingWindow({ title, icon, children, zIndex, onFocus, win, accentColor = '#c9a84c' }) {
-  const { pos, size, minimized, maximized, startDrag, startResize, toggleMaximize, toggleMinimize } = win
-  const style = maximized
-    ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', zIndex }
-    : { position: 'fixed', left: pos.x, top: pos.y, width: size.w, height: minimized ? 'auto' : size.h, zIndex }
-
-  return (
-    <div onMouseDown={onFocus} style={{
-      ...style,
-      background: 'rgba(8,6,16,0.97)',
-      border: `1px solid ${accentColor}44`,
-      borderRadius: maximized ? 0 : '8px',
-      overflow: 'hidden',
-      display: 'flex', flexDirection: 'column',
-      boxShadow: `0 8px 40px rgba(0,0,0,0.8), 0 0 0 1px ${accentColor}22`,
-      userSelect: 'none',
-    }}>
-      <div onMouseDown={startDrag} style={{
-        padding: '7px 10px',
-        background: 'linear-gradient(135deg, rgba(20,15,35,0.98), rgba(12,8,22,0.98))',
-        borderBottom: `1px solid ${accentColor}33`,
-        display: 'flex', alignItems: 'center', gap: '8px',
-        cursor: maximized ? 'default' : 'grab', flexShrink: 0,
-      }}>
-        <span style={{ fontSize: '11px' }}>{icon}</span>
-        <span style={{ flex: 1, fontSize: '10px', color: accentColor, fontFamily: "'Cinzel', serif", letterSpacing: '2px' }}>{title}</span>
-        <div style={{ display: 'flex', gap: '5px' }} onMouseDown={e => e.stopPropagation()}>
-          <button onClick={toggleMinimize} style={{ width: '13px', height: '13px', borderRadius: '50%', background: '#f59e0b', border: 'none', cursor: 'pointer', fontSize: '8px', color: '#000' }}>−</button>
-          <button onClick={toggleMaximize} style={{ width: '13px', height: '13px', borderRadius: '50%', background: '#10b981', border: 'none', cursor: 'pointer', fontSize: '8px', color: '#000' }}>⤢</button>
-        </div>
-      </div>
-      {!minimized && <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>{children}</div>}
-      {!minimized && !maximized && (
-        <div onMouseDown={startResize} style={{
-          position: 'absolute', bottom: 0, right: 0, width: '16px', height: '16px',
-          cursor: 'se-resize',
-          background: `linear-gradient(135deg, transparent 50%, ${accentColor}44 50%)`,
-          borderRadius: '0 0 8px 0',
-        }} />
-      )}
-    </div>
-  )
-}
-
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function Game() {
   const { campaignId } = useParams()
@@ -294,6 +216,7 @@ export default function Game() {
   const isHost = searchParams.get('host') === 'true'
   const { player, gameState, updateGameState, messages, addMessage, setMessages } = useGame()
 
+  // ─── RESPONSIVE ────────────────────────────────────────────────────────
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   useEffect(() => {
     const handle = () => setIsMobile(window.innerWidth < 768)
@@ -301,21 +224,15 @@ export default function Game() {
     return () => window.removeEventListener('resize', handle)
   }, [])
 
+  // ─── SCENE STATE ────────────────────────────────────────────────────────
   const [sceneUrl, setSceneUrl] = useState('')
   const [sceneLoading, setSceneLoading] = useState(false)
   const [sceneLabel, setSceneLabel] = useState('Adventure Begins')
+  const [sceneVisible, setSceneVisible] = useState(true)
   const currentSceneRef = useRef('exploration')
   const sceneSeedRef = useRef(Math.floor(Math.random() * 9999))
-  const [mobileSceneVisible, setMobileSceneVisible] = useState(true)
 
-  const sceneWin = useFloatingWindow({ x: 20, y: 60 }, { w: 520, h: 400 })
-  const chatWin = useFloatingWindow({ x: 560, y: 60 }, { w: 500, h: 600 })
-  const [zOrders, setZOrders] = useState({ scene: 10, chat: 11 })
-  const focusWindow = (name) => {
-    const max = Math.max(...Object.values(zOrders))
-    setZOrders(z => ({ ...z, [name]: max + 1 }))
-  }
-
+  // ─── GAME STATE ─────────────────────────────────────────────────────────
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showInventory, setShowInventory] = useState(false)
@@ -356,6 +273,7 @@ export default function Game() {
     prevMessageCount.current = messages.length
   }, [messages])
 
+  // ─── SCENE ──────────────────────────────────────────────────────────────
   const loadScene = useCallback((sceneName, label, seed) => {
     const prompt = SCENE_KEYWORDS[sceneName] || SCENE_KEYWORDS.exploration
     const useSeed = seed || sceneSeedRef.current
@@ -378,6 +296,7 @@ export default function Game() {
 
   useEffect(() => { loadScene('exploration', 'Adventure Begins') }, [])
 
+  // ─── INIT ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!campaignId) return
     loadMessages()
@@ -425,12 +344,20 @@ export default function Game() {
         try {
           const audio = playBase64Audio(base64Pcm, currentAudioRef)
           setTtsStatus('playing')
-          await new Promise((resolve, reject) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', reject); audio.play() })
+          await new Promise((resolve, reject) => {
+            audio.addEventListener('ended', resolve)
+            audio.addEventListener('error', reject)
+            audio.play()
+          })
         } catch (e) { console.log('Audio play error:', e) }
         isPlaying = false
         if (audioQueue.length > 0) playNext(); else setTtsStatus('idle')
       }
-      channel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => { if (mutedRef.current) return; audioQueue.push(payload.base64Pcm); playNext() })
+      channel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => {
+        if (mutedRef.current) return
+        audioQueue.push(payload.base64Pcm)
+        playNext()
+      })
       channel.on('broadcast', { event: 'audio_start' }, () => setTtsStatus('loading'))
       channel.on('broadcast', { event: 'audio_end' }, () => { if (audioQueue.length === 0) setTtsStatus('idle') })
     }
@@ -439,30 +366,39 @@ export default function Game() {
     return () => supabase.removeChannel(channel)
   }
 
+  // ─── HOST TTS: generate ALL chunks in parallel, play in order ────────────
   async function hostGenerateAndBroadcast(text) {
     if (mutedRef.current) return
     const clean = text.replace(/<[^>]+>/g, '').trim()
     if (!clean) return
     const paragraphs = clean.split(/\n+/).filter(p => p.trim().length > 0)
     const chunks = paragraphs.length > 0 ? paragraphs : [clean]
+
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
     setTtsStatus('loading')
+
     try {
-      let currentBase64 = await generateParagraphTTS(chunks[0], npcDataRef.current)
-      const broadcastAndPlay = async (base64Pcm) => {
+      // Generate ALL chunks simultaneously — no more waiting for each one
+      const allBase64 = await generateAllTTS(chunks, npcDataRef.current)
+
+      for (let i = 0; i < allBase64.length; i++) {
+        if (mutedRef.current) break
+        const base64Pcm = allBase64[i]
         audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
         const audio = playBase64Audio(base64Pcm, currentAudioRef)
         setTtsStatus('playing')
-        await new Promise((resolve, reject) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', reject); audio.play() })
-      }
-      for (let i = 0; i < chunks.length; i++) {
-        if (mutedRef.current) break
-        const nextPromise = i + 1 < chunks.length ? generateParagraphTTS(chunks[i + 1], npcDataRef.current) : null
-        await broadcastAndPlay(currentBase64)
-        if (nextPromise) currentBase64 = await nextPromise
+        await new Promise((resolve, reject) => {
+          audio.addEventListener('ended', resolve)
+          audio.addEventListener('error', reject)
+          audio.play()
+        })
       }
       setTtsStatus('idle')
-    } catch (e) { console.log('TTS error:', e); setTtsStatus('error') }
+    } catch (e) {
+      console.log('TTS error:', e)
+      setTtsStatus('error')
+    }
+
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
   }
 
@@ -542,11 +478,6 @@ export default function Game() {
     return channel
   }
 
-  async function handleTyping() {
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
-    typingTimeoutRef.current = setTimeout(() => {}, 2000)
-  }
-
   async function saveMessage(role, content, playerName = null) {
     await supabase.from('messages').insert({ campaign_id: campaignId, player_id: player?.id, role, content, player_name: playerName })
   }
@@ -561,9 +492,9 @@ export default function Game() {
     } else { setMentionSearch(null); setFilteredPlayers([]) }
   }
 
-  function insertMention(playerName) {
+  function insertMention(pName) {
     const atIndex = input.lastIndexOf('@')
-    setInput(input.slice(0, atIndex) + `@${playerName} `)
+    setInput(input.slice(0, atIndex) + `@${pName} `)
     setMentionSearch(null); setFilteredPlayers([])
     inputRef.current?.focus()
   }
@@ -613,8 +544,7 @@ export default function Game() {
     while (attempts < 3) {
       try { const raw = await callDM(null); await processDmResponse(raw); break }
       catch (e) {
-        console.log('DM error:', e)
-        attempts++
+        console.log('DM error:', e); attempts++
         if (attempts < 3) await new Promise(r => setTimeout(r, 5000))
         else await saveMessage('dm', 'The ancient magic stirs... try sending a message to begin your adventure.')
       }
@@ -642,50 +572,101 @@ export default function Game() {
   const hpPct = Math.max(0, (gameState.hp / gameState.maxHp) * 100)
   const hpColor = hpPct > 50 ? '#27ae60' : hpPct > 25 ? '#f39c12' : '#c0392b'
 
-  const SceneContent = (
-    <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0806' }}>
-      {sceneLoading && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#0a0806', zIndex: 2 }}>
-          <div style={{ fontSize: '24px', animation: 'spin 3s linear infinite' }}>⚔</div>
-          <div style={{ fontSize: '8px', color: '#4a3a2a', letterSpacing: '3px' }}>SUMMONING VISION...</div>
+  // ─── SCENE PERCENT (desktop 40%, mobile 35%) ─────────────────────────────
+  const scenePct = isMobile ? 35 : 40
+
+  // ─── RENDER ───────────────────────────────────────────────────────────────
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden', position: 'relative' }}>
+
+      {/* ── HEADER ── */}
+      <div style={{ padding: '8px 14px', background: 'rgba(10,8,18,0.98)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, zIndex: 10 }}>
+        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: isMobile ? '13px' : '15px', color: 'var(--gold)', letterSpacing: '2px' }}>⚔ LORECRAFT</div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {/* TTS Status */}
+          <div style={{
+            fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '1px', padding: '2px 7px',
+            color: ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : ttsStatus === 'error' ? '#c0392b' : 'var(--text-dim)',
+            border: `1px solid ${ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : ttsStatus === 'error' ? '#c0392b' : 'var(--border)'}`,
+            borderRadius: '4px'
+          }}>
+            {ttsStatus === 'playing' ? '🔊' : ttsStatus === 'loading' ? '⏳' : ttsStatus === 'error' ? '❌' : '💤'}
+          </div>
+          {/* Scene toggle */}
+          <button onClick={() => setSceneVisible(v => !v)} style={{ background: sceneVisible ? 'rgba(201,168,76,0.15)' : 'none', border: `1px solid ${sceneVisible ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: sceneVisible ? 'var(--gold)' : 'var(--text-dim)', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }} title="Toggle scene">🖼</button>
+          {/* Mute TTS */}
+          <button onClick={() => { const n = !mutedRef.current; mutedRef.current = n; setMuted(n); if (n && currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current = null } }} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>{muted ? '🔇' : '🔊'}</button>
+          {/* Mute music */}
+          <button onClick={() => { const n = !musicMutedRef.current; musicMutedRef.current = n; setMusicMuted(n); if (n && musicRef.current) musicRef.current.pause(); else if (!n && musicRef.current) musicRef.current.play() }} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>{musicMuted ? '🔕' : '🎵'}</button>
+          {/* Room code */}
+          {roomCode && <button onClick={() => setShowRoomCode(!showRoomCode)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '10px', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>🔗 {!isMobile && roomCode}</button>}
+          {/* Inventory */}
+          <button onClick={() => setShowInventory(true)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>🎒</button>
+        </div>
+      </div>
+
+      {/* ── ROOM CODE BANNER ── */}
+      {showRoomCode && roomCode && (
+        <div style={{ background: 'linear-gradient(135deg, #1e1830, #2a2045)', borderBottom: '1px solid var(--border)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '3px' }}>INVITE FRIENDS — SHARE THIS CODE</div>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '24px', color: 'var(--gold)', letterSpacing: '6px' }}>{roomCode}</div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => { navigator.clipboard.writeText(roomCode) }} style={{ background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '4px', color: 'var(--gold)', padding: '6px 14px', fontFamily: "'Cinzel', serif", fontSize: '10px', cursor: 'pointer' }}>COPY</button>
+            <button onClick={() => setShowRoomCode(false)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '6px 10px', cursor: 'pointer' }}>✕</button>
+          </div>
         </div>
       )}
-      {sceneUrl && (
-        <img src={sceneUrl} alt="Scene"
-          onLoad={() => setSceneLoading(false)}
-          onError={() => setSceneLoading(false)}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: sceneLoading ? 0 : 1, transition: 'opacity 1s', imageRendering: 'pixelated' }}
-        />
-      )}
-      {!sceneLoading && (
-        <>
-          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.8))', padding: '20px 10px 8px' }}>
-            <div style={{ fontSize: '9px', color: '#c9a84c88', letterSpacing: '2px', textTransform: 'uppercase' }}>{sceneLabel}</div>
-          </div>
-          <button onClick={regenerateScene} style={{ position: 'absolute', top: '6px', right: '6px', background: 'rgba(0,0,0,0.7)', border: '1px solid #c9a84c44', borderRadius: '4px', color: '#c9a84c88', fontSize: '8px', padding: '2px 7px', cursor: 'pointer', letterSpacing: '1px' }}>↻</button>
-        </>
-      )}
-    </div>
-  )
 
-  const ChatContent = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
-      <div style={{ padding: '6px 12px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0 }}>
-        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--text-dim)' }}>{player?.name} · {player?.class}</span>
+      {/* ── SCENE PANEL ── */}
+      {sceneVisible && (
+        <div style={{ height: `${scenePct}%`, flexShrink: 0, position: 'relative', borderBottom: '1px solid var(--border)', background: '#0a0806' }}>
+          {sceneLoading && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#0a0806', zIndex: 2 }}>
+              <div style={{ fontSize: '22px', animation: 'spin 3s linear infinite' }}>⚔</div>
+              <div style={{ fontSize: '8px', color: '#4a3a2a', letterSpacing: '3px' }}>SUMMONING VISION...</div>
+            </div>
+          )}
+          {sceneUrl && (
+            <img
+              src={sceneUrl}
+              alt={sceneLabel}
+              onLoad={() => setSceneLoading(false)}
+              onError={() => setSceneLoading(false)}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: sceneLoading ? 0 : 1, transition: 'opacity 0.8s' }}
+            />
+          )}
+          {!sceneLoading && (
+            <>
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.75))', padding: '16px 12px 6px' }}>
+                <div style={{ fontSize: '9px', color: '#c9a84c99', letterSpacing: '2px', textTransform: 'uppercase' }}>{sceneLabel}</div>
+              </div>
+              <button onClick={regenerateScene} style={{ position: 'absolute', top: '6px', right: '6px', background: 'rgba(0,0,0,0.65)', border: '1px solid #c9a84c44', borderRadius: '4px', color: '#c9a84c99', fontSize: '9px', padding: '2px 8px', cursor: 'pointer', letterSpacing: '1px' }}>↻ REGEN</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── STATS BAR ── */}
+      <div style={{ padding: '5px 14px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{player?.name} · {player?.class}</span>
         <div style={{ flex: 1, height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
           <div style={{ width: `${hpPct}%`, height: '100%', background: hpColor, transition: 'width 0.5s' }} />
         </div>
-        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--text)' }}>❤️ {gameState.hp}/{gameState.maxHp}</span>
-        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--gold)' }}>🪙 {gameState.gold}</span>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--text)', whiteSpace: 'nowrap' }}>❤️ {gameState.hp}/{gameState.maxHp}</span>
+        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--gold)', whiteSpace: 'nowrap' }}>🪙 {gameState.gold}</span>
       </div>
 
+      {/* DM busy banner */}
       {dmBusy && !loading && (
-        <div style={{ background: 'rgba(201,168,76,0.05)', borderBottom: '1px solid var(--border)', padding: '4px 12px', fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)', textAlign: 'center', flexShrink: 0 }}>
+        <div style={{ background: 'rgba(201,168,76,0.05)', borderBottom: '1px solid var(--border)', padding: '3px 14px', fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)', textAlign: 'center', flexShrink: 0 }}>
           ⚔️ THE DUNGEON MASTER IS RESPONDING...
         </div>
       )}
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {/* ── MESSAGES ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
         {messages.map((msg, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexDirection: msg.role === 'player' ? 'row-reverse' : 'row' }}>
@@ -705,8 +686,8 @@ export default function Game() {
               borderRight: msg.role === 'player' ? '2px solid var(--green)' : undefined,
               fontSize: '14px', lineHeight: 1.65, color: 'var(--text)', whiteSpace: 'pre-wrap'
             }}>
-              {msg.text.split(/(@\w+)/g).map((part, i) =>
-                part.startsWith('@') ? <span key={i} style={{ color: 'var(--gold)', fontWeight: 'bold' }}>{part}</span> : part
+              {msg.text.split(/(@\w+)/g).map((part, j) =>
+                part.startsWith('@') ? <span key={j} style={{ color: 'var(--gold)', fontWeight: 'bold' }}>{part}</span> : part
               )}
             </div>
           </div>
@@ -732,17 +713,19 @@ export default function Game() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div style={{ display: 'flex', gap: '5px', padding: '0 10px 6px', overflowX: 'auto', flexShrink: 0 }}>
+      {/* ── QUICK ACTIONS ── */}
+      <div style={{ display: 'flex', gap: '5px', padding: '4px 12px 4px', overflowX: 'auto', flexShrink: 0, background: 'var(--bg)' }}>
         {['👁 Look Around', '⚔️ Attack', '🌑 Sneak', '🔍 Search', '💬 Talk', '💨 Flee'].map(action => (
           <button key={action} onClick={() => quickAction(action.split(' ').slice(1).join(' '))}
-            style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '14px', padding: '5px 12px', color: dmBusy ? '#3a3050' : 'var(--text-dim)', fontSize: '10px', letterSpacing: '1px', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Cinzel', serif", cursor: dmBusy ? 'not-allowed' : 'pointer' }}>
+            style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '14px', padding: '4px 12px', color: dmBusy ? '#3a3050' : 'var(--text-dim)', fontSize: '10px', letterSpacing: '1px', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Cinzel', serif", cursor: dmBusy ? 'not-allowed' : 'pointer' }}>
             {action}
           </button>
         ))}
       </div>
 
+      {/* ── @ MENTION DROPDOWN ── */}
       {mentionSearch !== null && filteredPlayers.length > 0 && (
-        <div style={{ position: 'absolute', bottom: '70px', left: '10px', background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '8px', overflow: 'hidden', zIndex: 50, boxShadow: '0 0 20px rgba(201,168,76,0.2)' }}>
+        <div style={{ position: 'absolute', bottom: '70px', left: '12px', background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '8px', overflow: 'hidden', zIndex: 50, boxShadow: '0 0 20px rgba(201,168,76,0.2)' }}>
           {filteredPlayers.map(p => (
             <div key={p} onClick={() => insertMention(p)} style={{ padding: '8px 14px', cursor: 'pointer', fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold-light)', letterSpacing: '1px', borderBottom: '1px solid var(--border)' }}>
               ⚔️ {p}
@@ -751,123 +734,28 @@ export default function Game() {
         </div>
       )}
 
-      <div style={{ padding: '8px 10px 12px', background: 'rgba(10,8,18,0.98)', borderTop: '1px solid var(--border)', display: 'flex', gap: '7px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
+      {/* ── INPUT ── */}
+      <div style={{ padding: '6px 12px 10px', background: 'rgba(10,8,18,0.98)', borderTop: '1px solid var(--border)', display: 'flex', gap: '7px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
         <textarea ref={inputRef} value={input}
           onChange={e => handleInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-          placeholder={dmBusy ? 'The DM is responding...' : 'What do you do...'}
+          placeholder={dmBusy ? 'The DM is responding...' : 'What do you do... (@ to mention a player)'}
           disabled={dmBusy} rows={1}
           style={{ flex: 1, background: 'var(--bg2)', border: `1px solid ${dmBusy ? 'rgba(201,168,76,0.1)' : 'var(--border)'}`, borderRadius: '18px', padding: '8px 14px', color: dmBusy ? 'var(--text-dim)' : 'var(--text)', fontSize: '15px', outline: 'none', resize: 'none', maxHeight: '80px', lineHeight: 1.4, fontFamily: "'EB Garamond', serif", cursor: dmBusy ? 'not-allowed' : 'text' }}
         />
-        <button onClick={sendMessage} disabled={dmBusy} style={{ width: '38px', height: '38px', background: dmBusy ? 'var(--bg2)' : 'linear-gradient(135deg, #2a1f0a, #3d2e10)', border: `1px solid ${dmBusy ? 'var(--border)' : 'var(--gold)'}`, borderRadius: '50%', color: dmBusy ? 'var(--text-dim)' : 'var(--gold)', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: dmBusy ? 'none' : '0 0 15px rgba(201,168,76,0.15)', cursor: dmBusy ? 'not-allowed' : 'pointer' }}>➤</button>
-      </div>
-    </div>
-  )
-
-  if (isMobile) {
-    return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', position: 'relative' }}>
-        <div style={{ padding: '8px 12px', background: 'rgba(10,8,18,0.95)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '14px', color: 'var(--gold)', letterSpacing: '2px' }}>LORECRAFT</div>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <div style={{ fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '1px', color: ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : 'var(--text-dim)', padding: '2px 6px', border: `1px solid ${ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px' }}>
-              {ttsStatus === 'playing' ? '🔊' : ttsStatus === 'loading' ? '⏳' : '💤'}
-            </div>
-            <button onClick={() => setMobileSceneVisible(v => !v)} style={{ background: mobileSceneVisible ? 'rgba(201,168,76,0.15)' : 'none', border: `1px solid ${mobileSceneVisible ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: mobileSceneVisible ? 'var(--gold)' : 'var(--text-dim)', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>🖼</button>
-            <button onClick={() => { const n = !mutedRef.current; mutedRef.current = n; setMuted(n); if (n && currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current = null } }} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px' }}>{muted ? '🔇' : '🔊'}</button>
-            <button onClick={() => { const n = !musicMutedRef.current; musicMutedRef.current = n; setMusicMuted(n); if (n && musicRef.current) musicRef.current.pause(); else if (!n && musicRef.current) musicRef.current.play() }} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px' }}>{musicMuted ? '🔕' : '🎵'}</button>
-            {roomCode && <button onClick={() => setShowRoomCode(!showRoomCode)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '10px', fontFamily: "'Cinzel', serif" }}>🔗</button>}
-            <button onClick={() => setShowInventory(true)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', padding: '3px 8px', fontSize: '12px' }}>🎒</button>
-          </div>
-        </div>
-
-        {showRoomCode && roomCode && (
-          <div style={{ background: 'linear-gradient(135deg, #1e1830, #2a2045)', borderBottom: '1px solid var(--border)', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-            <div>
-              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '3px' }}>INVITE FRIENDS</div>
-              <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '22px', color: 'var(--gold)', letterSpacing: '6px' }}>{roomCode}</div>
-            </div>
-            <button onClick={() => { navigator.clipboard.writeText(roomCode); setShowRoomCode(false) }} style={{ background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '4px', color: 'var(--gold)', padding: '6px 12px', fontFamily: "'Cinzel', serif", fontSize: '10px' }}>COPY</button>
-          </div>
-        )}
-
-        {mobileSceneVisible && (
-          <div style={{ height: '38%', flexShrink: 0, borderBottom: '1px solid var(--border)', position: 'relative' }}>
-            {SceneContent}
-          </div>
-        )}
-
-        <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-          {ChatContent}
-        </div>
-
-        {showInventory && (
-          <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'flex-end', zIndex: 100 }}>
-            <div onClick={e => e.stopPropagation()} style={{ width: '100%', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: '20px 20px 0 0', padding: '20px 24px 40px' }}>
-              <div style={{ width: '40px', height: '4px', background: 'var(--border)', borderRadius: '2px', margin: '0 auto 20px' }} />
-              <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', marginBottom: '16px' }}>⚔ Inventory</div>
-              {gameState.inventory.map((item, i) => <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid rgba(201,168,76,0.1)', fontSize: '15px', color: 'var(--text)' }}>{item}</div>)}
-              <div style={{ padding: '10px 0', fontSize: '15px', color: 'var(--gold)' }}>🪙 {gameState.gold} Gold</div>
-            </div>
-          </div>
-        )}
-
-        <style>{`
-          @keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:0.4}30%{transform:translateY(-6px);opacity:1} }
-          @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        `}</style>
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ width: '100vw', height: '100vh', background: '#050408', backgroundImage: 'radial-gradient(ellipse at 20% 50%, rgba(30,15,60,0.3) 0%, transparent 60%)', overflow: 'hidden', position: 'relative', fontFamily: 'Georgia, serif' }}>
-      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(201,168,76,0.02) 40px,rgba(201,168,76,0.02) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(201,168,76,0.02) 40px,rgba(201,168,76,0.02) 41px)', pointerEvents: 'none' }} />
-
-      <FloatingWindow title={sceneLabel.toUpperCase()} icon="🖼" zIndex={zOrders.scene} onFocus={() => focusWindow('scene')} win={sceneWin} accentColor="#c9a84c">
-        {SceneContent}
-      </FloatingWindow>
-
-      <FloatingWindow title="DUNGEON MASTER" icon="⚔" zIndex={zOrders.chat} onFocus={() => focusWindow('chat')} win={chatWin} accentColor="#27ae60">
-        {ChatContent}
-      </FloatingWindow>
-
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '42px', background: 'rgba(5,3,10,0.98)', borderTop: '1px solid rgba(201,168,76,0.15)', display: 'flex', alignItems: 'center', padding: '0 14px', gap: '8px', zIndex: 1000 }}>
-        <div style={{ color: '#c9a84c', fontSize: '11px', letterSpacing: '3px', fontFamily: "'Cinzel', serif", marginRight: '10px' }}>⚔ LORECRAFT</div>
-        {[
-          { key: 'scene', icon: '🖼', label: 'SCENE', w: sceneWin, accent: '#c9a84c' },
-          { key: 'chat', icon: '⚔', label: 'CHAT', w: chatWin, accent: '#27ae60' },
-        ].map(({ key, icon, label, w, accent }) => (
-          <button key={key} onClick={() => { w.toggleMinimize(); focusWindow(key) }} style={{ padding: '4px 12px', fontSize: '9px', letterSpacing: '2px', background: w.minimized ? 'rgba(255,255,255,0.03)' : `${accent}22`, border: `1px solid ${w.minimized ? '#2a2a2a' : accent + '66'}`, borderRadius: '4px', color: w.minimized ? '#4a4a4a' : accent, cursor: 'pointer', fontFamily: "'Cinzel', serif" }}>{icon} {label}</button>
-        ))}
-        <div style={{ fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '1px', color: ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? '#c9a84c' : ttsStatus === 'error' ? '#c0392b' : '#3a3a3a', padding: '3px 8px', border: `1px solid ${ttsStatus === 'playing' ? '#27ae60' : ttsStatus === 'loading' ? '#c9a84c' : ttsStatus === 'error' ? '#c0392b' : '#2a2a2a'}`, borderRadius: '4px' }}>
-          {ttsStatus === 'playing' ? '🔊 PLAYING' : ttsStatus === 'loading' ? '⏳ LOADING' : ttsStatus === 'error' ? '❌ ERROR' : '💤 IDLE'}
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          {roomCode && <button onClick={() => setShowRoomCode(!showRoomCode)} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 10px', fontSize: '10px', fontFamily: "'Cinzel', serif", cursor: 'pointer' }}>🔗 {roomCode}</button>}
-          <button onClick={() => setShowInventory(true)} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>🎒</button>
-          <button onClick={() => { const n = !mutedRef.current; mutedRef.current = n; setMuted(n); if (n && currentAudioRef.current) { currentAudioRef.current.pause(); currentAudioRef.current = null } }} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>{muted ? '🔇' : '🔊'}</button>
-          <button onClick={() => { const n = !musicMutedRef.current; musicMutedRef.current = n; setMusicMuted(n); if (n && musicRef.current) musicRef.current.pause(); else if (!n && musicRef.current) musicRef.current.play() }} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: '4px', color: '#4a4a4a', padding: '3px 8px', fontSize: '12px', cursor: 'pointer' }}>{musicMuted ? '🔕' : '🎵'}</button>
-        </div>
+        <button onClick={sendMessage} disabled={dmBusy}
+          style={{ width: '38px', height: '38px', background: dmBusy ? 'var(--bg2)' : 'linear-gradient(135deg, #2a1f0a, #3d2e10)', border: `1px solid ${dmBusy ? 'var(--border)' : 'var(--gold)'}`, borderRadius: '50%', color: dmBusy ? 'var(--text-dim)' : 'var(--gold)', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: dmBusy ? 'none' : '0 0 15px rgba(201,168,76,0.15)', cursor: dmBusy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>➤</button>
       </div>
 
-      {showRoomCode && roomCode && (
-        <div style={{ position: 'fixed', top: '60px', left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #1e1830, #2a2045)', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: '20px', zIndex: 2000, boxShadow: '0 8px 40px rgba(0,0,0,0.8)' }}>
-          <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '4px' }}>INVITE FRIENDS</div>
-            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '28px', color: 'var(--gold)', letterSpacing: '8px' }}>{roomCode}</div>
-          </div>
-          <button onClick={() => { navigator.clipboard.writeText(roomCode); setShowRoomCode(false) }} style={{ background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '4px', color: 'var(--gold)', padding: '8px 16px', fontFamily: "'Cinzel', serif", fontSize: '11px' }}>COPY</button>
-          <button onClick={() => setShowRoomCode(false)} style={{ background: 'none', border: '1px solid #3a2a3a', borderRadius: '4px', color: '#6a5a6a', padding: '8px 10px', cursor: 'pointer' }}>✕</button>
-        </div>
-      )}
-
+      {/* ── INVENTORY MODAL ── */}
       {showInventory && (
-        <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '340px', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px' }}>
-            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', marginBottom: '16px' }}>⚔ Inventory</div>
-            {gameState.inventory.map((item, i) => <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid rgba(201,168,76,0.1)', fontSize: '14px', color: 'var(--text)' }}>{item}</div>)}
-            <div style={{ padding: '10px 0', fontSize: '14px', color: 'var(--gold)' }}>🪙 {gameState.gold} Gold</div>
+        <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', zIndex: 200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: isMobile ? '100%' : '340px', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: isMobile ? '20px 20px 0 0' : '12px', padding: '20px 24px 32px' }}>
+            <div style={{ width: '40px', height: '4px', background: 'var(--border)', borderRadius: '2px', margin: '0 auto 16px' }} />
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '16px', color: 'var(--gold)', marginBottom: '14px' }}>⚔ Inventory</div>
+            {gameState.inventory.length === 0 && <div style={{ fontSize: '13px', color: 'var(--text-dim)', padding: '8px 0' }}>Empty</div>}
+            {gameState.inventory.map((item, i) => <div key={i} style={{ padding: '9px 0', borderBottom: '1px solid rgba(201,168,76,0.1)', fontSize: '14px', color: 'var(--text)' }}>{item}</div>)}
+            <div style={{ padding: '9px 0', fontSize: '14px', color: 'var(--gold)' }}>🪙 {gameState.gold} Gold</div>
           </div>
         </div>
       )}
