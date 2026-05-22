@@ -33,11 +33,6 @@ function buildSceneUrl(prompt, seed) {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=800&height=500&nologo=true&seed=${seed}&model=flux`
 }
 
-function buildNpcSceneUrl(npc, sceneName) {
-  const envPrompt = SCENE_KEYWORDS[sceneName] || SCENE_KEYWORDS.exploration
-  const npcPrompt = `2D pixel art RPG character portrait, 16-bit style, ${npc.description || `${npc.race} ${npc.role}`}, ${envPrompt}, character visible, game art style`
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(npcPrompt)}?width=800&height=500&nologo=true&seed=${npc.seed || Math.floor(Math.random() * 9999)}&model=flux`
-}
 // ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Your role is to create an immersive, dynamic, and engaging adventure.
 
