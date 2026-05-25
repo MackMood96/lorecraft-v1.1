@@ -13,12 +13,12 @@ const ITEM_TYPES = { weapon: '⚔️', armor: '🛡️', consumable: '🧪', que
 
 // ─── RARITY CONFIG ───────────────────────────────────────────────────────────
 const RARITIES = {
-  cursed:    { label: 'Cursed',    color: '#8b0000', bg: 'rgba(139,0,0,0.15)',     chance: 0.10 },
-  common:    { label: 'Common',    color: '#9e9e9e', bg: 'rgba(158,158,158,0.1)',  chance: 0.40 },
-  uncommon:  { label: 'Uncommon',  color: '#4caf50', bg: 'rgba(76,175,80,0.1)',    chance: 0.25 },
-  rare:      { label: 'Rare',      color: '#2196f3', bg: 'rgba(33,150,243,0.1)',   chance: 0.15 },
-  epic:      { label: 'Epic',      color: '#9c27b0', bg: 'rgba(156,39,176,0.1)',   chance: 0.08 },
-  legendary: { label: 'Legendary', color: '#ffd700', bg: 'rgba(255,215,0,0.1)',    chance: 0.02 },
+  cursed:    { label: 'Cursed',    color: '#8b0000', bg: 'rgba(139,0,0,0.15)',    chance: 0.10 },
+  common:    { label: 'Common',    color: '#9e9e9e', bg: 'rgba(158,158,158,0.1)', chance: 0.40 },
+  uncommon:  { label: 'Uncommon',  color: '#4caf50', bg: 'rgba(76,175,80,0.1)',   chance: 0.25 },
+  rare:      { label: 'Rare',      color: '#2196f3', bg: 'rgba(33,150,243,0.1)',  chance: 0.15 },
+  epic:      { label: 'Epic',      color: '#9c27b0', bg: 'rgba(156,39,176,0.1)',  chance: 0.08 },
+  legendary: { label: 'Legendary', color: '#ffd700', bg: 'rgba(255,215,0,0.1)',   chance: 0.02 },
 }
 
 function rollRarity() {
@@ -87,6 +87,33 @@ For cursed items: dark humor, negative twist. For legendary: mythic, awe-inspiri
   } catch {
     return { name: 'Mystery Shard', description: 'Its purpose is unclear.', effect: 'Unknown', flavor_text: 'Some things defy explanation.', rarity, type }
   }
+}
+
+// ─── GEMINI IMAGE GENERATION ──────────────────────────────────────────────────
+async function generateGeminiImage(prompt) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+      })
+    }
+  )
+  const data = await response.json()
+  const imagePart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
+  if (!imagePart) throw new Error('No image in response')
+  const blob = base64ToBlob(imagePart.inlineData.data, imagePart.inlineData.mimeType)
+  return URL.createObjectURL(blob)
+}
+
+function base64ToBlob(base64, mimeType) {
+  const bytes = atob(base64)
+  const arr = new Uint8Array(bytes.length)
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
+  return new Blob([arr], { type: mimeType })
 }
 
 // ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
@@ -276,10 +303,6 @@ function buildNpcRoster(npcData) {
   return npcs.map(n => `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`).join('\n')
 }
 
-function buildSceneUrl(prompt, seed) {
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1200&height=400&nologo=true&seed=${seed}&model=flux`
-}
-
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function Game() {
   const { campaignId } = useParams()
@@ -300,11 +323,11 @@ export default function Game() {
   const [sceneLoading, setSceneLoading] = useState(false)
   const [sceneLabel, setSceneLabel] = useState('Adventure Begins')
   const [sceneVisible, setSceneVisible] = useState(true)
-  const sceneSeedRef = useRef(Math.floor(Math.random() * 99999))
+  const lastDmTextRef = useRef('')
 
   // ─── INVENTORY STATE ──────────────────────────────────────────────────────
   const [showInventory, setShowInventory] = useState(false)
-  const [inventoryTab, setInventoryTab] = useState('items') // 'items' | 'equipment' | 'abilities'
+  const [inventoryTab, setInventoryTab] = useState('items')
   const [vaultRolling, setVaultRolling] = useState(false)
   const [vaultResult, setVaultResult] = useState(null)
   const [vaultRollsAvailable, setVaultRollsAvailable] = useState(1)
@@ -349,73 +372,58 @@ export default function Game() {
     prevMessageCount.current = messages.length
   }, [messages])
 
-  // ─── SCENE ────────────────────────────────────────────────────────────────
-  const loadSceneFromPrompt = useCallback((prompt, label) => {
-    setSceneLoading(true)
-    setSceneLabel(label || 'Scene')
-    setSceneUrl(buildSceneUrl(prompt, sceneSeedRef.current))
-  }, [])
-
-  const regenerateScene = () => {
-    sceneSeedRef.current = Math.floor(Math.random() * 99999)
-    if (sceneUrl) {
-      const url = new URL(sceneUrl)
-      url.searchParams.set('seed', sceneSeedRef.current)
-      setSceneLoading(true)
-      setSceneUrl(url.toString())
-    }
-  }
-
-  // ─── HOST: Generate scene from DM text via Groq ───────────────────────────
+  // ─── SCENE: Generate via Groq + Gemini, broadcast to all players ──────────
   const hostGenerateAndBroadcastScene = useCallback(async (dmText) => {
     try {
+      lastDmTextRef.current = dmText
       const scenePrompt = await generateScenePrompt(dmText)
-      const seed = sceneSeedRef.current
-      const url = buildSceneUrl(scenePrompt, seed)
-      // Broadcast scene URL to all players
+      const imageUrl = await generateGeminiImage(scenePrompt)
       sceneChannelRef.current?.send({
         type: 'broadcast', event: 'scene_update',
-        payload: { url, label: scenePrompt.slice(0, 40) + '...', seed }
+        payload: { url: imageUrl, label: scenePrompt.slice(0, 50) }
       })
       setSceneLoading(true)
-      setSceneLabel(scenePrompt.slice(0, 40) + '...')
-      setSceneUrl(url)
+      setSceneLabel(scenePrompt.slice(0, 50))
+      setSceneUrl(imageUrl)
     } catch (e) {
       console.log('Scene generation error:', e)
     }
   }, [])
 
-  // ─── HOST: Generate NPC portrait via Groq ─────────────────────────────────
+  // ─── NPC PORTRAIT: Generate via Groq + Gemini, broadcast + save ───────────
   const hostGenerateNpcPortrait = useCallback(async (npc) => {
     try {
       const portraitPrompt = await generateNpcPortraitPrompt(npc)
-      const seed = Math.abs(npc.name.split('').reduce((a, c) => a + c.charCodeAt(0), 0) * 997) % 99999
-      const portraitUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(portraitPrompt)}?width=512&height=512&nologo=true&seed=${seed}&model=flux`
-      // Broadcast NPC portrait to all players
+      const portraitUrl = await generateGeminiImage(portraitPrompt)
       sceneChannelRef.current?.send({
         type: 'broadcast', event: 'npc_portrait',
-        payload: { url: portraitUrl, label: npc.name, seed }
+        payload: { url: portraitUrl, label: npc.name }
       })
       setSceneLoading(true)
       setSceneLabel(npc.name)
       setSceneUrl(portraitUrl)
-      return { portraitUrl, seed }
+      return { portraitUrl }
     } catch (e) {
       console.log('NPC portrait error:', e)
       return {}
     }
   }, [])
 
+  // ─── REGENERATE: Re-run last DM text through scene pipeline ──────────────
+  const regenerateScene = () => {
+    if (lastDmTextRef.current) {
+      hostGenerateAndBroadcastScene(lastDmTextRef.current)
+    }
+  }
+
   // ─── SCENE + AUDIO REALTIME CHANNELS ─────────────────────────────────────
   function subscribeToSceneAndAudio() {
-    // Scene channel
     const sceneChannel = supabase.channel(`scene:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
       sceneChannel.on('broadcast', { event: 'scene_update' }, ({ payload }) => {
         setSceneLoading(true)
         setSceneLabel(payload.label || 'Scene')
         setSceneUrl(payload.url)
-        sceneSeedRef.current = payload.seed
       })
       sceneChannel.on('broadcast', { event: 'npc_portrait' }, ({ payload }) => {
         setSceneLoading(true)
@@ -426,7 +434,6 @@ export default function Game() {
     sceneChannel.subscribe()
     sceneChannelRef.current = sceneChannel
 
-    // Audio channel
     const audioChannel = supabase.channel(`audio:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
       const audioQueue = []; let isPlaying = false
@@ -452,6 +459,7 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
+  // ─── HOST TTS ─────────────────────────────────────────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
     const clean = text.replace(/<[^>]+>/g, '').trim()
@@ -495,8 +503,9 @@ export default function Game() {
     loadPlayers()
     loadPlayerAvatars()
     checkDmBusy()
-    // Load initial scene
-    hostGenerateAndBroadcastScene('A fantasy adventure begins, misty landscape, ancient world')
+    if (isHost) {
+      hostGenerateAndBroadcastScene('A fantasy adventure begins, misty landscape, ancient world')
+    }
     const poll = setInterval(() => { loadMessages(); checkDmBusy() }, 3000)
     return () => { cleanupChannels(); clearInterval(poll); if (musicRef.current) { musicRef.current.pause(); musicRef.current = null } }
   }, [campaignId])
@@ -640,20 +649,17 @@ export default function Game() {
   }
 
   async function processDmResponse(raw) {
-    // NPC data — generate portrait, save with locked seed
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
-      const { portraitUrl, seed } = await hostGenerateNpcPortrait(npc)
-      const updated = { ...npcDataRef.current, [npc.name]: { ...npc, seed, portrait_url: portraitUrl } }
+      const { portraitUrl } = await hostGenerateNpcPortrait(npc)
+      const updated = { ...npcDataRef.current, [npc.name]: { ...npc, portrait_url: portraitUrl } }
       setNpcData(updated); npcDataRef.current = updated
       await saveNpcData(updated)
     }
 
-    // State update
     const stateUpdate = parseStateUpdate(raw)
     if (stateUpdate) updateGameState(stateUpdate)
 
-    // Inventory adds
     const adds = parseInventoryAdd(raw)
     adds.forEach(add => {
       if (add.player === player?.name) {
@@ -661,7 +667,6 @@ export default function Game() {
       }
     })
 
-    // Inventory removes
     const removes = parseInventoryRemove(raw)
     removes.forEach(remove => {
       if (remove.player === player?.name) {
@@ -669,7 +674,6 @@ export default function Game() {
       }
     })
 
-    // Grant vault roll
     const grantRoll = parseGrantRoll(raw)
     if (grantRoll?.player === player?.name) {
       setVaultRollsAvailable(v => v + 1)
@@ -713,17 +717,14 @@ export default function Game() {
 
   // ─── VAULT OF FATES ───────────────────────────────────────────────────────
   async function rollVault(type) {
-    if (vaultRolling || vaultRollsAvailable <= 0) return
-    if (type === 'item' && gameState.gold < 50 && vaultRollsAvailable <= 0) return
+    if (vaultRolling) return
+    if (vaultRollsAvailable <= 0 && gameState.gold < 50) return
     setVaultRolling(true)
     setVaultResult(null)
-
     const rarity = rollRarity()
     const result = await generateVaultRoll(player?.class || 'Warrior', player?.race || 'Human', rarity, type)
-
     setVaultResult(result)
     setVaultRolling(false)
-
     if (vaultRollsAvailable > 0) {
       setVaultRollsAvailable(v => v - 1)
     } else {
@@ -734,7 +735,7 @@ export default function Game() {
   async function claimVaultResult() {
     if (!vaultResult) return
     if (vaultResult.type === 'item') {
-      const icon = RARITIES[vaultResult.rarity]?.label === 'Cursed' ? '💀' : '✨'
+      const icon = vaultResult.rarity === 'cursed' ? '💀' : '✨'
       updateGameState({ inventory: [...(gameState.inventory || []), `${icon} ${vaultResult.name}`] })
     } else {
       const abilities = player?.abilities || []
@@ -899,14 +900,11 @@ export default function Game() {
       {showInventory && (
         <div onClick={() => setShowInventory(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', zIndex: 200 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: isMobile ? '100%' : '420px', maxHeight: isMobile ? '85vh' : '80vh', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: isMobile ? '20px 20px 0 0' : '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-            {/* Modal header */}
             <div style={{ padding: '16px 20px 0' }}>
               <div style={{ width: '36px', height: '3px', background: 'var(--border)', borderRadius: '2px', margin: '0 auto 14px' }} />
               <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '15px', color: 'var(--gold)', marginBottom: '12px' }}>⚔ Character</div>
-              {/* Tabs */}
               <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
-                {[['items', '🎒 Items'], ['equipment', '🛡️ Equipment'], ['abilities', '✨ Abilities'], ['vault', '🎲 Vault']].map(([tab, label]) => (
+                {[['items', '🎒 Items'], ['equipment', '🛡️ Equip'], ['abilities', '✨ Abilities'], ['vault', '🎲 Vault']].map(([tab, label]) => (
                   <button key={tab} onClick={() => setInventoryTab(tab)} style={{ flex: 1, padding: '5px 0', fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '1px', background: inventoryTab === tab ? 'rgba(201,168,76,0.15)' : 'transparent', border: `1px solid ${inventoryTab === tab ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: inventoryTab === tab ? 'var(--gold)' : 'var(--text-dim)', cursor: 'pointer' }}>{label}</button>
                 ))}
               </div>
@@ -914,22 +912,18 @@ export default function Game() {
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px' }}>
 
-              {/* ITEMS TAB */}
               {inventoryTab === 'items' && (
                 <div>
                   {(gameState.inventory || []).length === 0
                     ? <div style={{ fontSize: '12px', color: 'var(--text-dim)', padding: '16px 0', textAlign: 'center', fontStyle: 'italic' }}>Your pack is empty</div>
                     : (gameState.inventory || []).map((item, i) => (
-                        <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid rgba(201,168,76,0.08)', fontSize: '13px', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span>{item}</span>
-                        </div>
+                        <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid rgba(201,168,76,0.08)', fontSize: '13px', color: 'var(--text)' }}>{item}</div>
                       ))
                   }
                   <div style={{ padding: '10px 0', fontSize: '13px', color: 'var(--gold)', borderTop: '1px solid rgba(201,168,76,0.15)', marginTop: '6px' }}>🪙 {gameState.gold} Gold</div>
                 </div>
               )}
 
-              {/* EQUIPMENT TAB */}
               {inventoryTab === 'equipment' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[['mainHand', '🗡️ Main Hand'], ['offHand', '🛡️ Off Hand'], ['armor', '🧥 Armor'], ['accessory', '💍 Accessory']].map(([slot, label]) => {
@@ -948,7 +942,6 @@ export default function Game() {
                       </div>
                     )
                   })}
-                  {/* Attributes */}
                   <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', marginTop: '4px' }}>
                     <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '1px', marginBottom: '8px' }}>ATTRIBUTES</div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
@@ -964,7 +957,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* ABILITIES TAB */}
               {inventoryTab === 'abilities' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {(player?.abilities || []).length === 0
@@ -973,9 +965,9 @@ export default function Game() {
                         const rar = RARITIES[ability.rarity] || RARITIES.common
                         return (
                           <div key={i} style={{ background: rar.bg, border: `1px solid ${rar.color}44`, borderLeft: `3px solid ${rar.color}`, borderRadius: '8px', padding: '10px 12px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                               <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: rar.color }}>{ability.name}</div>
-                              <div style={{ fontSize: '8px', color: rar.color, letterSpacing: '1px' }}>{rar.label.toUpperCase()}</div>
+                              <div style={{ fontSize: '8px', color: rar.color }}>{rar.label.toUpperCase()}</div>
                             </div>
                             <div style={{ fontSize: '11px', color: 'var(--text)', marginBottom: '3px' }}>{ability.effect}</div>
                             <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic' }}>{ability.flavor_text}</div>
@@ -986,7 +978,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* VAULT TAB */}
               {inventoryTab === 'vault' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -995,8 +986,6 @@ export default function Game() {
                       The mystical vault holds items and abilities of unknown power. From useless trinkets to legendary artifacts — fate decides.
                     </div>
                   </div>
-
-                  {/* Roll buttons */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     {[['item', '📦 Roll Item'], ['ability', '✨ Roll Ability']].map(([type, label]) => (
                       <button key={type} onClick={() => rollVault(type)} disabled={vaultRolling || (vaultRollsAvailable <= 0 && gameState.gold < 50)}
@@ -1005,28 +994,23 @@ export default function Game() {
                       </button>
                     ))}
                   </div>
-
                   <div style={{ textAlign: 'center', fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)' }}>
                     {vaultRollsAvailable > 0 ? `${vaultRollsAvailable} free roll${vaultRollsAvailable !== 1 ? 's' : ''} available` : '50 🪙 per roll'}
                   </div>
-
-                  {/* Rarity odds */}
                   <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px' }}>
                     <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '2px', marginBottom: '8px' }}>RARITY ODDS</div>
                     {Object.entries(RARITIES).map(([key, rar]) => (
-                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                         <span style={{ fontSize: '10px', color: rar.color }}>{rar.label}</span>
                         <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{(rar.chance * 100).toFixed(0)}%</span>
                       </div>
                     ))}
                   </div>
-
-                  {/* Vault result */}
                   {vaultResult && (
                     <div style={{ background: RARITIES[vaultResult.rarity]?.bg || 'var(--bg2)', border: `2px solid ${RARITIES[vaultResult.rarity]?.color || 'var(--gold)'}`, borderRadius: '10px', padding: '14px', animation: 'fadeIn 0.5s ease' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '13px', color: RARITIES[vaultResult.rarity]?.color }}>{vaultResult.name}</div>
-                        <div style={{ fontSize: '8px', letterSpacing: '1px', color: RARITIES[vaultResult.rarity]?.color }}>{RARITIES[vaultResult.rarity]?.label?.toUpperCase()}</div>
+                        <div style={{ fontSize: '8px', color: RARITIES[vaultResult.rarity]?.color }}>{RARITIES[vaultResult.rarity]?.label?.toUpperCase()}</div>
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text)', marginBottom: '4px' }}>{vaultResult.description}</div>
                       <div style={{ fontSize: '11px', color: '#27ae60', marginBottom: '4px' }}>Effect: {vaultResult.effect}</div>
