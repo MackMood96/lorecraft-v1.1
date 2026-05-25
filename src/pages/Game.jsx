@@ -460,29 +460,56 @@ export default function Game() {
   }
 
   // ─── HOST TTS ─────────────────────────────────────────────────────────────
-  async function hostGenerateAndBroadcastAudio(text) {
-    if (mutedRef.current) return
-    const clean = text.replace(/<[^>]+>/g, '').trim()
-    if (!clean) return
-    const paragraphs = clean.split(/\n+/).filter(p => p.trim().length > 0)
-    const chunks = paragraphs.length > 0 ? paragraphs : [clean]
-    audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
-    setTtsStatus('loading')
-    try {
-      const allBase64 = await generateAllTTS(chunks, npcDataRef.current)
-      for (let i = 0; i < allBase64.length; i++) {
-        if (mutedRef.current) break
-        const base64Pcm = allBase64[i]
+ async function hostGenerateAndBroadcastAudio(text) {
+  if (mutedRef.current) return
+  const clean = text.replace(/<[^>]+>/g, '').trim()
+  if (!clean) return
+  const paragraphs = clean.split(/\n+/).filter(p => p.trim().length > 0)
+  const chunks = paragraphs.length > 0 ? paragraphs : [clean]
+
+  audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
+  setTtsStatus('loading')
+
+  // Generate and play in pipeline — don't wait for all chunks before starting
+  const generated = new Array(chunks.length).fill(null)
+  let playIndex = 0
+  let allGenerated = false
+
+  // Start generating all chunks simultaneously
+  const genPromises = chunks.map((chunk, i) =>
+    generateParagraphTTS(chunk, npcDataRef.current)
+      .then(base64 => { generated[i] = base64 })
+      .catch(e => { console.log(`TTS chunk ${i} failed:`, e); generated[i] = 'failed' })
+  )
+
+  // Play chunks as they become ready in order
+  const playInOrder = async () => {
+    while (playIndex < chunks.length) {
+      // Wait until the current chunk is ready
+      while (generated[playIndex] === null) {
+        await new Promise(r => setTimeout(r, 100))
+      }
+      if (mutedRef.current) break
+      const base64Pcm = generated[playIndex]
+      if (base64Pcm && base64Pcm !== 'failed') {
         audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
         const audio = playBase64Audio(base64Pcm, currentAudioRef)
         setTtsStatus('playing')
-        await new Promise((resolve, reject) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', reject); audio.play() })
+        await new Promise((resolve, reject) => {
+          audio.addEventListener('ended', resolve)
+          audio.addEventListener('error', resolve) // resolve on error to continue
+          audio.play().catch(resolve)
+        })
       }
-      setTtsStatus('idle')
-    } catch (e) { console.log('TTS error:', e); setTtsStatus('error') }
+      playIndex++
+    }
+    setTtsStatus('idle')
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
   }
 
+  // Run both simultaneously
+  await Promise.all([Promise.all(genPromises), playInOrder()])
+}
   function playMusic(mood) {
     if (musicMutedRef.current) return
     if (currentMoodRef.current === mood && musicRef.current && !musicRef.current.paused) return
