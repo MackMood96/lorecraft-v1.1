@@ -1,55 +1,159 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGame } from '../context/GameContext'
 import { supabase } from '../supabase'
 
+// ─── CLASSES ─────────────────────────────────────────────────────────────────
 const CLASSES = [
-  { id: 'warrior', name: 'Warrior', icon: '⚔️', desc: 'Mighty fighter, expert in arms and armor', hp: 120, color: '#c0392b',
-    inventory: ['⚔️ Longsword', '🛡️ Iron Shield', '🍞 Rations x3'] },
-  { id: 'rogue', name: 'Rogue', icon: '🗡️', desc: 'Shadow walker, master of stealth and cunning', hp: 85, color: '#8e44ad',
-    inventory: ['🗡️ Twin Daggers', '🔧 Thieves Tools', '🌑 Shadow Cloak'] },
-  { id: 'mage', name: 'Mage', icon: '🔮', desc: 'Arcane scholar, wielder of destructive magic', hp: 70, color: '#2980b9',
-    inventory: ['📖 Spellbook', '🔮 Arcane Focus', '💊 Mana Potion x2'] },
-  { id: 'ranger', name: 'Ranger', icon: '🏹', desc: 'Wilderness hunter, skilled with bow and beast', hp: 95, color: '#27ae60',
-    inventory: ['🏹 Longbow', '🪶 Quiver 20 arrows', '🐺 Animal Bond Scroll'] },
+  {
+    id: 'warrior', name: 'Warrior', icon: '⚔️', color: '#c0392b',
+    desc: 'Mighty fighter, expert in arms and armor',
+    baseHp: 120,
+    attrBonus: { str: 15, vit: 10 },
+    attrCaps: { int: 40, cha: 40 },
+    equipment: {
+      mainHand: { name: 'Longsword', icon: '⚔️', type: 'weapon', stats: { str: 8 } },
+      offHand: { name: 'Iron Shield', icon: '🛡️', type: 'shield', stats: { vit: 4 } },
+      armor: { name: 'Chainmail', icon: '🧥', type: 'armor', stats: { vit: 6 } },
+      accessory: null,
+    },
+    consumables: [{ name: 'Rations', icon: '🍞', qty: 3 }],
+    allowedWeapons: ['sword', 'axe', 'mace', 'spear', 'shield', 'bow'],
+    allowedArmor: ['light', 'medium', 'heavy'],
+  },
+  {
+    id: 'rogue', name: 'Rogue', icon: '🗡️', color: '#8e44ad',
+    desc: 'Shadow walker, master of stealth and cunning',
+    baseHp: 85,
+    attrBonus: { dex: 15, lck: 10 },
+    attrCaps: { str: 50, int: 40 },
+    equipment: {
+      mainHand: { name: 'Twin Daggers', icon: '🗡️', type: 'weapon', stats: { dex: 7 } },
+      offHand: null,
+      armor: { name: 'Shadow Cloak', icon: '🌑', type: 'armor', stats: { dex: 4 } },
+      accessory: { name: 'Thieves Tools', icon: '🔧', type: 'accessory', stats: { lck: 3 } },
+    },
+    consumables: [{ name: 'Smoke Bomb', icon: '💨', qty: 2 }],
+    allowedWeapons: ['dagger', 'shortbow', 'shortword'],
+    allowedArmor: ['light'],
+  },
+  {
+    id: 'mage', name: 'Mage', icon: '🔮', color: '#2980b9',
+    desc: 'Arcane scholar, wielder of destructive magic',
+    baseHp: 70,
+    attrBonus: { int: 20, cha: 10 },
+    attrCaps: { str: 30, vit: 50 },
+    equipment: {
+      mainHand: { name: 'Arcane Staff', icon: '🪄', type: 'weapon', stats: { int: 10 } },
+      offHand: { name: 'Arcane Focus', icon: '🔮', type: 'offhand', stats: { int: 5 } },
+      armor: { name: 'Mage Robes', icon: '👘', type: 'armor', stats: { int: 3 } },
+      accessory: null,
+    },
+    consumables: [{ name: 'Mana Potion', icon: '💊', qty: 2 }],
+    allowedWeapons: ['staff', 'wand', 'orb'],
+    allowedArmor: ['robes'],
+  },
+  {
+    id: 'ranger', name: 'Ranger', icon: '🏹', color: '#27ae60',
+    desc: 'Wilderness hunter, skilled with bow and beast',
+    baseHp: 95,
+    attrBonus: { dex: 15, str: 10 },
+    attrCaps: { int: 45, cha: 45 },
+    equipment: {
+      mainHand: { name: 'Longbow', icon: '🏹', type: 'weapon', stats: { dex: 9 } },
+      offHand: { name: 'Quiver', icon: '🪶', type: 'offhand', stats: { dex: 2 } },
+      armor: { name: 'Leather Armor', icon: '🧥', type: 'armor', stats: { dex: 3 } },
+      accessory: { name: 'Animal Bond Scroll', icon: '🐺', type: 'accessory', stats: { lck: 4 } },
+    },
+    consumables: [{ name: 'Herb Pouch', icon: '🌿', qty: 2 }],
+    allowedWeapons: ['bow', 'dagger', 'shortsword'],
+    allowedArmor: ['light', 'medium'],
+  },
 ]
 
+// ─── RACES ───────────────────────────────────────────────────────────────────
 const RACES = [
-  { id: 'human', name: 'Human', icon: '👤', desc: 'Versatile and ambitious' },
-  { id: 'elf', name: 'Elf', icon: '🧝', desc: 'Graceful and long-lived' },
-  { id: 'dwarf', name: 'Dwarf', icon: '⛏️', desc: 'Sturdy and resilient' },
-  { id: 'orc', name: 'Orc', icon: '💪', desc: 'Powerful and fierce' },
-  { id: 'halfling', name: 'Halfling', icon: '🍀', desc: 'Lucky and nimble' },
-  { id: 'tiefling', name: 'Tiefling', icon: '😈', desc: 'Infernal and charismatic' },
-  { id: 'dragonborn', name: 'Dragonborn', icon: '🐉', desc: 'Draconic and proud' },
-  { id: 'undead', name: 'Undead', icon: '💀', desc: 'Cursed and relentless' },
+  { id: 'human',      name: 'Human',      icon: '👤', desc: 'Versatile and ambitious',    bonus: { str: 5, dex: 5, int: 5, vit: 5, cha: 5, lck: 5 } },
+  { id: 'elf',        name: 'Elf',        icon: '🧝', desc: 'Graceful and long-lived',    bonus: { dex: 10, int: 5 } },
+  { id: 'dwarf',      name: 'Dwarf',      icon: '⛏️', desc: 'Sturdy and resilient',       bonus: { vit: 10, str: 5 } },
+  { id: 'orc',        name: 'Orc',        icon: '💪', desc: 'Powerful and fierce',         bonus: { str: 15, cha: -5 } },
+  { id: 'halfling',   name: 'Halfling',   icon: '🍀', desc: 'Lucky and nimble',            bonus: { lck: 10, dex: 5 } },
+  { id: 'tiefling',   name: 'Tiefling',   icon: '😈', desc: 'Infernal and charismatic',   bonus: { cha: 10, int: 5 } },
+  { id: 'dragonborn', name: 'Dragonborn', icon: '🐉', desc: 'Draconic and proud',          bonus: { str: 10, vit: 5 } },
+  { id: 'undead',     name: 'Undead',     icon: '💀', desc: 'Cursed and relentless',       bonus: { vit: 10, cha: -10, lck: 5 } },
 ]
 
+// ─── AFFINITIES ──────────────────────────────────────────────────────────────
 const AFFINITIES = [
-  { id: 'fire', name: 'Fire', icon: '🔥', color: '#e74c3c' },
-  { id: 'shadow', name: 'Shadow', icon: '🌑', color: '#8e44ad' },
-  { id: 'nature', name: 'Nature', icon: '🌿', color: '#27ae60' },
-  { id: 'arcane', name: 'Arcane', icon: '✨', color: '#2980b9' },
-  { id: 'thunder', name: 'Thunder', icon: '⚡', color: '#f39c12' },
-  { id: 'ice', name: 'Ice', icon: '❄️', color: '#00bcd4' },
-  { id: 'light', name: 'Light', icon: '🌟', color: '#f1c40f' },
-  { id: 'blood', name: 'Blood', icon: '🩸', color: '#c0392b' },
+  { id: 'fire',    name: 'Fire',    icon: '🔥', color: '#e74c3c', bonus: { str: 5, int: 3 } },
+  { id: 'shadow',  name: 'Shadow',  icon: '🌑', color: '#8e44ad', bonus: { dex: 5, lck: 3 } },
+  { id: 'nature',  name: 'Nature',  icon: '🌿', color: '#27ae60', bonus: { vit: 5, lck: 3 } },
+  { id: 'arcane',  name: 'Arcane',  icon: '✨', color: '#2980b9', bonus: { int: 8 } },
+  { id: 'thunder', name: 'Thunder', icon: '⚡', color: '#f39c12', bonus: { str: 4, dex: 4 } },
+  { id: 'ice',     name: 'Ice',     icon: '❄️', color: '#00bcd4', bonus: { int: 5, vit: 3 } },
+  { id: 'light',   name: 'Light',   icon: '🌟', color: '#f1c40f', bonus: { cha: 5, lck: 3 } },
+  { id: 'blood',   name: 'Blood',   icon: '🩸', color: '#c0392b', bonus: { str: 6, vit: 2 } },
 ]
 
-const STEPS = ['Class', 'Race', 'Affinity', 'Identity']
+// ─── ATTRIBUTE CONFIG ────────────────────────────────────────────────────────
+const ATTRS = [
+  { id: 'str', name: 'Strength',     icon: '💪', color: '#c0392b', desc: 'Melee damage, carrying capacity' },
+  { id: 'dex', name: 'Dexterity',    icon: '🏃', color: '#27ae60', desc: 'Speed, stealth, ranged accuracy' },
+  { id: 'int', name: 'Intelligence', icon: '🔮', color: '#2980b9', desc: 'Spell power, knowledge checks' },
+  { id: 'vit', name: 'Vitality',     icon: '❤️', color: '#e74c3c', desc: 'Max HP, stamina' },
+  { id: 'cha', name: 'Charisma',     icon: '💬', color: '#f39c12', desc: 'NPC persuasion, trading prices' },
+  { id: 'lck', name: 'Luck',         icon: '🍀', color: '#1abc9c', desc: 'Critical hit chance, loot quality' },
+]
 
-function buildAvatarPrompt(cls, race, affinity, appearance) {
-  const base = `fantasy portrait, ${race.name} ${cls.name}, ${affinity.name} affinity magic`
-  const detail = appearance ? `, ${appearance}` : ''
-  const style = ', highly detailed, dramatic lighting, dark fantasy art style, digital painting, face focus'
-  return encodeURIComponent(base + detail + style)
+const BASE_POINTS = 100
+const ATTR_MIN = 5
+const ATTR_MAX_BASE = 60
+
+const STEPS = ['Class', 'Race', 'Affinity', 'Attributes', 'Identity']
+
+// ─── GROQ HELPERS ────────────────────────────────────────────────────────────
+async function callGroq(systemPrompt, userPrompt) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 200,
+      temperature: 0.7
+    })
+  })
+  const data = await response.json()
+  return data.choices?.[0]?.message?.content?.trim() || ''
 }
 
+async function generateAvatarPrompt(cls, race, affinity, appearance) {
+  const system = `You are an expert image prompt engineer for a dark fantasy pixel art RPG game. 
+Generate a Pollinations.ai image prompt for a character portrait.
+Return ONLY the prompt text, nothing else. No quotes, no explanation.
+Style must always include: 2D pixel art, 16-bit RPG style, character portrait, dark fantasy, face and upper body, clean pixel lines, dramatic lighting`
+
+  const user = `Character: ${race.name} ${cls.name} with ${affinity.name} affinity.
+${appearance ? `Appearance: ${appearance}` : ''}
+Generate a detailed pixel art portrait prompt.`
+
+  const prompt = await callGroq(system, user)
+  return prompt || `2D pixel art RPG portrait, ${race.name} ${cls.name}, ${affinity.name} magic aura, dark fantasy, 16-bit style, face and upper body, dramatic lighting`
+}
+
+// ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CharCreate() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const joinRoomCode = searchParams.get('room')
   const { setPlayer, updateGameState } = useGame()
+
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
   const [selectedClass, setSelectedClass] = useState(null)
@@ -63,46 +167,73 @@ export default function CharCreate() {
   const [campaignData, setCampaignData] = useState(null)
   const [imageLoaded, setImageLoaded] = useState(false)
 
-  async function handleBegin() {
-    if (!name.trim() || !selectedClass || !selectedRace || !selectedAffinity) return
-    setLoading(true)
+  // ─── ATTRIBUTE STATE ──────────────────────────────────────────────────────
+  const [baseAttrs, setBaseAttrs] = useState({ str: 5, dex: 5, int: 5, vit: 5, cha: 5, lck: 5 })
 
-    const cls = CLASSES.find(c => c.id === selectedClass)
-    const race = RACES.find(r => r.id === selectedRace)
-    const affinity = AFFINITIES.find(a => a.id === selectedAffinity)
+  const cls = CLASSES.find(c => c.id === selectedClass)
+  const race = RACES.find(r => r.id === selectedRace)
+  const affinity = AFFINITIES.find(a => a.id === selectedAffinity)
+
+  // ─── COMPUTED ATTRIBUTES (base + class bonus + race bonus + affinity bonus)
+  const finalAttrs = useMemo(() => {
+    const result = { ...baseAttrs }
+    if (cls) Object.entries(cls.attrBonus).forEach(([k, v]) => { result[k] = (result[k] || 0) + v })
+    if (race) Object.entries(race.bonus).forEach(([k, v]) => { result[k] = (result[k] || 0) + v })
+    if (affinity) Object.entries(affinity.bonus).forEach(([k, v]) => { result[k] = (result[k] || 0) + v })
+    return result
+  }, [baseAttrs, cls, race, affinity])
+
+  const pointsUsed = Object.values(baseAttrs).reduce((a, b) => a + b, 0) - (ATTR_MIN * 6)
+  const pointsLeft = BASE_POINTS - pointsUsed
+
+  const computedHp = cls ? cls.baseHp + ((finalAttrs.vit || 0) * 2) : 0
+
+  function getCap(attrId) {
+    if (!cls) return ATTR_MAX_BASE
+    return cls.attrCaps?.[attrId] ?? ATTR_MAX_BASE
+  }
+
+  function adjustAttr(attrId, delta) {
+    const current = baseAttrs[attrId]
+    const newVal = current + delta
+    if (newVal < ATTR_MIN) return
+    if (newVal > getCap(attrId)) return
+    if (delta > 0 && pointsLeft <= 0) return
+    setBaseAttrs(prev => ({ ...prev, [attrId]: newVal }))
+  }
+
+  // ─── SUBMIT ───────────────────────────────────────────────────────────────
+  async function handleBegin() {
+    if (!name.trim() || !cls || !race || !affinity) return
+    setLoading(true)
 
     try {
       let campaignId, roomCode
 
       if (joinRoomCode) {
-        // Joining existing campaign
-        const { data: existingCampaign, error: campError } = await supabase
-          .from('campaigns')
-          .select()
-          .eq('room_code', joinRoomCode)
-          .single()
-
-        if (campError || !existingCampaign) {
-          console.error('Campaign not found')
-          setLoading(false)
-          return
-        }
-        campaignId = existingCampaign.id
+        const { data: existing, error } = await supabase
+          .from('campaigns').select().eq('room_code', joinRoomCode).single()
+        if (error || !existing) { setLoading(false); return }
+        campaignId = existing.id
         roomCode = joinRoomCode
       } else {
-        // Creating new campaign
         const newRoomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
-        const { data: newCampaign, error: campError } = await supabase
+        const { data: newCampaign, error } = await supabase
           .from('campaigns')
           .insert({ room_code: newRoomCode, name: `${name}'s Campaign` })
-          .select()
-          .single()
-
-        if (campError) throw campError
+          .select().single()
+        if (error) throw error
         campaignId = newCampaign.id
         roomCode = newRoomCode
       }
 
+      // Build starting inventory from equipment + consumables
+      const startingInventory = [
+        ...Object.values(cls.equipment).filter(Boolean).map(e => `${e.icon} ${e.name}`),
+        ...cls.consumables.map(c => `${c.icon} ${c.name} x${c.qty}`)
+      ]
+
+      // Insert player
       const { data: player, error: playerError } = await supabase
         .from('players')
         .insert({
@@ -112,44 +243,43 @@ export default function CharCreate() {
           affinity: affinity.name,
           appearance: appearance.trim(),
           backstory: backstory.trim(),
-          hp: cls.hp,
-          max_hp: cls.hp,
+          hp: computedHp,
+          max_hp: computedHp,
           gold: 10,
           level: 1,
-          inventory: cls.inventory
+          inventory: startingInventory,
+          attributes: finalAttrs,
+          equipment: cls.equipment,
+          abilities: [],
         })
-        .select()
-        .single()
+        .select().single()
 
       if (playerError) throw playerError
 
       setPlayer(player)
       updateGameState({
-        hp: cls.hp,
-        maxHp: cls.hp,
-        inventory: cls.inventory,
+        hp: computedHp,
+        maxHp: computedHp,
+        inventory: startingInventory,
         gold: 10,
-        level: 1
+        level: 1,
+        attributes: finalAttrs,
+        equipment: cls.equipment,
       })
 
-      const prompt = buildAvatarPrompt(cls, race, affinity, appearance)
-      const url = `https://image.pollinations.ai/prompt/${prompt}?width=512&height=512&nologo=true&seed=${Date.now()}`
+      // Generate avatar prompt via Groq then Pollinations
+      const avatarPrompt = await generateAvatarPrompt(cls, race, affinity, appearance)
+      const seed = Math.abs(name.trim().split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) * 997 + cls.id.length * 31 + race.id.length * 17) % 99999
+      const avatarPollUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(avatarPrompt)}?width=512&height=512&nologo=true&seed=${seed}&model=flux`
 
-      const isLocalhost = window.location.hostname === 'localhost'
-      if (isLocalhost) {
-        setAvatarUrl(url)
-      } else {
-        try {
-          const imgResponse = await fetch(url)
-          const blob = await imgResponse.blob()
-          const blobUrl = URL.createObjectURL(blob)
-          setAvatarUrl(blobUrl)
-          await supabase.from('players').update({ avatar_url: url }).eq('id', player.id)
-        } catch {
-          setAvatarUrl(url)
-        }
-      }
+      // Save avatar info to player
+      await supabase.from('players').update({
+        avatar_url: avatarPollUrl,
+        avatar_seed: seed,
+        avatar_prompt: avatarPrompt,
+      }).eq('id', player.id)
 
+      setAvatarUrl(avatarPollUrl)
       setCampaignData({ id: campaignId, roomCode, isJoin: !!joinRoomCode })
       setShowReveal(true)
       setLoading(false)
@@ -160,7 +290,7 @@ export default function CharCreate() {
     }
   }
 
-  async function handleEnterRealm() {
+  function handleEnterRealm() {
     if (!campaignData) return
     if (campaignData.isJoin) {
       navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}`)
@@ -173,240 +303,121 @@ export default function CharCreate() {
     if (step === 0) return !!selectedClass
     if (step === 1) return !!selectedRace
     if (step === 2) return !!selectedAffinity
-    if (step === 3) return !!name.trim()
+    if (step === 3) return pointsLeft === 0
+    if (step === 4) return !!name.trim()
     return false
   }
 
+  // ─── REVEAL SCREEN ────────────────────────────────────────────────────────
   if (showReveal) {
-    const cls = CLASSES.find(c => c.id === selectedClass)
-    const race = RACES.find(r => r.id === selectedRace)
-    const affinity = AFFINITIES.find(a => a.id === selectedAffinity)
-
     return (
-      <div style={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(ellipse at 50% 30%, #1e1535 0%, #0a0812 70%)',
-        gap: '24px',
-        animation: 'fadeIn 1s ease forwards',
-        padding: '32px'
-      }}>
-        <div style={{
-          fontFamily: "'Cinzel', serif",
-          fontSize: '10px',
-          letterSpacing: '4px',
-          color: 'var(--text-dim)'
-        }}>
-          YOUR HERO AWAKENS
-        </div>
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'radial-gradient(ellipse at 50% 30%, #1e1535 0%, #0a0812 70%)', gap: '20px', padding: '32px', overflowY: 'auto' }}>
+        <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '4px', color: 'var(--text-dim)' }}>YOUR HERO AWAKENS</div>
 
-        <div style={{
-          width: '200px',
-          height: '200px',
-          borderRadius: '50%',
-          overflow: 'hidden',
-          border: '3px solid var(--gold)',
-          boxShadow: '0 0 40px rgba(201,168,76,0.4)',
-          animation: 'glowPulse 2s ease-in-out infinite',
-          background: 'var(--bg3)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative'
-        }}>
-          {!imageLoaded && (
-            <div style={{
-              fontFamily: "'Cinzel', serif",
-              fontSize: '10px',
-              letterSpacing: '2px',
-              color: 'var(--text-dim)',
-              textAlign: 'center',
-              padding: '16px',
-              zIndex: 1
-            }}>
-              ✨<br/>CONJURING<br/>YOUR FORM...
-            </div>
-          )}
-          <img
-            src={avatarUrl}
-            alt="Your character"
-            onLoad={() => setImageLoaded(true)}
-            onError={e => console.log('Image failed to load:', e)}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              opacity: imageLoaded ? 1 : 0,
-              transition: 'opacity 0.8s ease',
-              position: 'absolute',
-              top: 0,
-              left: 0
-            }}
-          />
+        <div style={{ width: '180px', height: '180px', borderRadius: '50%', overflow: 'hidden', border: '3px solid var(--gold)', boxShadow: '0 0 40px rgba(201,168,76,0.4)', background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', flexShrink: 0 }}>
+          {!imageLoaded && <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', color: 'var(--text-dim)', textAlign: 'center', padding: '16px' }}>✨<br/>CONJURING<br/>YOUR FORM...</div>}
+          <img src={avatarUrl} alt="Character" onLoad={() => setImageLoaded(true)} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: imageLoaded ? 1 : 0, transition: 'opacity 0.8s', position: 'absolute', inset: 0 }} />
         </div>
 
         <div style={{ textAlign: 'center' }}>
-          <div style={{
-            fontFamily: "'Cinzel Decorative', serif",
-            fontSize: '28px',
-            color: 'var(--gold-light)',
-            letterSpacing: '4px',
-            marginBottom: '8px'
-          }}>
-            {name}
-          </div>
-          <div style={{
-            fontFamily: "'Cinzel', serif",
-            fontSize: '12px',
-            letterSpacing: '3px',
-            color: 'var(--text-dim)'
-          }}>
-            {race?.name} {cls?.name} · {affinity?.icon} {affinity?.name}
-          </div>
+          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '26px', color: 'var(--gold-light)', letterSpacing: '4px', marginBottom: '6px' }}>{name}</div>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '3px', color: 'var(--text-dim)' }}>{race?.name} {cls?.name} · {affinity?.icon} {affinity?.name}</div>
         </div>
 
-        {appearance && (
-          <div style={{
-            fontStyle: 'italic',
-            color: 'var(--text-dim)',
-            fontSize: '14px',
-            textAlign: 'center',
-            maxWidth: '300px',
-            lineHeight: 1.6
-          }}>
-            "{appearance}"
-          </div>
-        )}
+        {/* Attribute summary */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', width: '100%', maxWidth: '320px' }}>
+          {ATTRS.map(attr => (
+            <div key={attr.id} style={{ background: 'var(--bg2)', border: `1px solid ${attr.color}44`, borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '14px' }}>{attr.icon}</div>
+              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '1px' }}>{attr.name.slice(0, 3).toUpperCase()}</div>
+              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '14px', color: attr.color, fontWeight: 'bold' }}>{finalAttrs[attr.id] || 0}</div>
+            </div>
+          ))}
+        </div>
 
-        <button
-          onClick={handleEnterRealm}
-          style={{
-            marginTop: '8px',
-            padding: '14px 40px',
-            background: 'linear-gradient(135deg, #2a1f0a, #3d2e10)',
-            border: '1px solid var(--gold)',
-            borderRadius: '4px',
-            color: 'var(--gold-light)',
-            fontFamily: "'Cinzel', serif",
-            fontSize: '13px',
-            letterSpacing: '3px',
-            cursor: 'pointer',
-            boxShadow: '0 0 30px rgba(201,168,76,0.2)'
-          }}>
+        <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)', letterSpacing: '2px' }}>❤️ {computedHp} HP · 🪙 10 Gold</div>
+
+        <button onClick={handleEnterRealm} style={{ padding: '14px 40px', background: 'linear-gradient(135deg, #2a1f0a, #3d2e10)', border: '1px solid var(--gold)', borderRadius: '4px', color: 'var(--gold-light)', fontFamily: "'Cinzel', serif", fontSize: '13px', letterSpacing: '3px', cursor: 'pointer', boxShadow: '0 0 30px rgba(201,168,76,0.2)' }}>
           {campaignData?.isJoin ? 'JOIN THE REALM →' : 'ENTER THE REALM →'}
         </button>
 
         <style>{`
-          @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          @keyframes glowPulse {
-            0%, 100% { box-shadow: 0 0 40px rgba(201,168,76,0.4); }
-            50% { box-shadow: 0 0 60px rgba(201,168,76,0.7); }
-          }
+          @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         `}</style>
       </div>
     )
   }
 
+  // ─── MAIN FLOW ────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      background: 'var(--bg)',
-      overflowY: 'auto'
-    }}>
-      <div style={{ padding: '24px 24px 0' }}>
-        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '20px', color: 'var(--gold-light)', letterSpacing: '2px' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflowY: 'auto' }}>
+
+      {/* Header */}
+      <div style={{ padding: '20px 20px 0' }}>
+        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '18px', color: 'var(--gold-light)', letterSpacing: '2px' }}>
           {joinRoomCode ? 'Join the Adventure' : 'Create Your Hero'}
         </div>
-        <div style={{ fontSize: '14px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px' }}>
-          {joinRoomCode ? `Joining campaign ${joinRoomCode}` : 'Who will you become in the realm of Lorecraft?'}
+        <div style={{ fontSize: '13px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px' }}>
+          {joinRoomCode ? `Joining campaign ${joinRoomCode}` : 'Forge your legend in the realm of Lorecraft'}
         </div>
-        <div style={{ height: '1px', background: 'linear-gradient(90deg, var(--gold), transparent)', marginTop: '12px', opacity: 0.4 }}/>
+        <div style={{ height: '1px', background: 'linear-gradient(90deg, var(--gold), transparent)', marginTop: '10px', opacity: 0.4 }} />
       </div>
 
-      <div style={{ padding: '16px 24px 0', display: 'flex', gap: '8px' }}>
+      {/* Progress Steps */}
+      <div style={{ padding: '14px 20px 0', display: 'flex', gap: '6px' }}>
         {STEPS.map((s, i) => (
-          <div key={s} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-            <div style={{
-              width: '100%', height: '3px', borderRadius: '2px',
-              background: i <= step ? 'var(--gold)' : 'var(--border)',
-              transition: 'background 0.3s'
-            }}/>
-            <div style={{
-              fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '1px',
-              color: i === step ? 'var(--gold)' : i < step ? 'var(--text-dim)' : '#3a3050'
-            }}>
+          <div key={s} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+            <div style={{ width: '100%', height: '3px', borderRadius: '2px', background: i <= step ? 'var(--gold)' : 'var(--border)', transition: 'background 0.3s' }} />
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '1px', color: i === step ? 'var(--gold)' : i < step ? 'var(--text-dim)' : '#3a3050' }}>
               {s.toUpperCase()}
             </div>
           </div>
         ))}
       </div>
 
+      {/* ── STEP 0: CLASS ── */}
       {step === 0 && (
-        <div style={{ padding: '20px 24px 0', flex: 1 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
-            CHOOSE YOUR CLASS
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            {CLASSES.map(cls => (
-              <div
-                key={cls.id}
-                onClick={() => setSelectedClass(cls.id)}
-                style={{
-                  background: selectedClass === cls.id ? 'var(--bg3)' : 'var(--bg2)',
-                  border: `1px solid ${selectedClass === cls.id ? cls.color : 'var(--border)'}`,
-                  borderTop: selectedClass === cls.id ? `2px solid ${cls.color}` : `1px solid var(--border)`,
-                  borderRadius: '8px', padding: '16px 12px', cursor: 'pointer',
-                  boxShadow: selectedClass === cls.id ? `0 0 20px ${cls.color}22` : 'none'
-                }}
-              >
-                <div style={{ fontSize: '28px', marginBottom: '8px' }}>{cls.icon}</div>
-                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '1px', color: 'var(--gold-light)', marginBottom: '4px' }}>
-                  {cls.name.toUpperCase()}
+        <div style={{ padding: '16px 20px 0', flex: 1 }}>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '10px' }}>CHOOSE YOUR CLASS</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {CLASSES.map(c => (
+              <div key={c.id} onClick={() => setSelectedClass(c.id)} style={{ background: selectedClass === c.id ? 'var(--bg3)' : 'var(--bg2)', border: `1px solid ${selectedClass === c.id ? c.color : 'var(--border)'}`, borderTop: selectedClass === c.id ? `2px solid ${c.color}` : `1px solid var(--border)`, borderRadius: '8px', padding: '14px 10px', cursor: 'pointer', boxShadow: selectedClass === c.id ? `0 0 20px ${c.color}22` : 'none' }}>
+                <div style={{ fontSize: '26px', marginBottom: '6px' }}>{c.icon}</div>
+                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '1px', color: 'var(--gold-light)', marginBottom: '3px' }}>{c.name.toUpperCase()}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic', lineHeight: 1.4, marginBottom: '6px' }}>{c.desc}</div>
+                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: c.color }}>❤️ {c.baseHp} base HP</div>
+                <div style={{ marginTop: '4px', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                  {Object.entries(c.attrBonus).map(([k, v]) => (
+                    <span key={k} style={{ fontSize: '8px', color: '#27ae60', background: 'rgba(39,174,96,0.1)', borderRadius: '3px', padding: '1px 4px' }}>+{v} {k.toUpperCase()}</span>
+                  ))}
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic', lineHeight: 1.4 }}>
-                  {cls.desc}
-                </div>
-                <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: cls.color }}>
-                  ❤️ {cls.hp} HP
-                </div>
+                {Object.keys(c.attrCaps).length > 0 && (
+                  <div style={{ marginTop: '3px', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {Object.entries(c.attrCaps).map(([k, v]) => (
+                      <span key={k} style={{ fontSize: '8px', color: '#c0392b', background: 'rgba(192,57,43,0.1)', borderRadius: '3px', padding: '1px 4px' }}>max {v} {k.toUpperCase()}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </div>
       )}
 
+      {/* ── STEP 1: RACE ── */}
       {step === 1 && (
-        <div style={{ padding: '20px 24px 0', flex: 1 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
-            CHOOSE YOUR RACE
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            {RACES.map(race => (
-              <div
-                key={race.id}
-                onClick={() => setSelectedRace(race.id)}
-                style={{
-                  background: selectedRace === race.id ? 'var(--bg3)' : 'var(--bg2)',
-                  border: `1px solid ${selectedRace === race.id ? 'var(--gold)' : 'var(--border)'}`,
-                  borderTop: selectedRace === race.id ? `2px solid var(--gold)` : `1px solid var(--border)`,
-                  borderRadius: '8px', padding: '16px 12px', cursor: 'pointer',
-                  boxShadow: selectedRace === race.id ? `0 0 20px rgba(201,168,76,0.15)` : 'none'
-                }}
-              >
-                <div style={{ fontSize: '28px', marginBottom: '8px' }}>{race.icon}</div>
-                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '1px', color: 'var(--gold-light)', marginBottom: '4px' }}>
-                  {race.name.toUpperCase()}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                  {race.desc}
+        <div style={{ padding: '16px 20px 0', flex: 1 }}>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '10px' }}>CHOOSE YOUR RACE</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {RACES.map(r => (
+              <div key={r.id} onClick={() => setSelectedRace(r.id)} style={{ background: selectedRace === r.id ? 'var(--bg3)' : 'var(--bg2)', border: `1px solid ${selectedRace === r.id ? 'var(--gold)' : 'var(--border)'}`, borderTop: selectedRace === r.id ? `2px solid var(--gold)` : `1px solid var(--border)`, borderRadius: '8px', padding: '14px 10px', cursor: 'pointer', boxShadow: selectedRace === r.id ? `0 0 20px rgba(201,168,76,0.15)` : 'none' }}>
+                <div style={{ fontSize: '26px', marginBottom: '6px' }}>{r.icon}</div>
+                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '1px', color: 'var(--gold-light)', marginBottom: '3px' }}>{r.name.toUpperCase()}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic', marginBottom: '6px' }}>{r.desc}</div>
+                <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+                  {Object.entries(r.bonus).map(([k, v]) => (
+                    <span key={k} style={{ fontSize: '8px', color: v > 0 ? '#27ae60' : '#c0392b', background: v > 0 ? 'rgba(39,174,96,0.1)' : 'rgba(192,57,43,0.1)', borderRadius: '3px', padding: '1px 4px' }}>{v > 0 ? '+' : ''}{v} {k.toUpperCase()}</span>
+                  ))}
                 </div>
               </div>
             ))}
@@ -414,27 +425,19 @@ export default function CharCreate() {
         </div>
       )}
 
+      {/* ── STEP 2: AFFINITY ── */}
       {step === 2 && (
-        <div style={{ padding: '20px 24px 0', flex: 1 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
-            CHOOSE YOUR AFFINITY
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            {AFFINITIES.map(aff => (
-              <div
-                key={aff.id}
-                onClick={() => setSelectedAffinity(aff.id)}
-                style={{
-                  background: selectedAffinity === aff.id ? 'var(--bg3)' : 'var(--bg2)',
-                  border: `1px solid ${selectedAffinity === aff.id ? aff.color : 'var(--border)'}`,
-                  borderTop: selectedAffinity === aff.id ? `2px solid ${aff.color}` : `1px solid var(--border)`,
-                  borderRadius: '8px', padding: '16px 12px', cursor: 'pointer',
-                  boxShadow: selectedAffinity === aff.id ? `0 0 20px ${aff.color}33` : 'none'
-                }}
-              >
-                <div style={{ fontSize: '28px', marginBottom: '8px' }}>{aff.icon}</div>
-                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '1px', color: 'var(--gold-light)' }}>
-                  {aff.name.toUpperCase()}
+        <div style={{ padding: '16px 20px 0', flex: 1 }}>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '10px' }}>CHOOSE YOUR AFFINITY</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {AFFINITIES.map(a => (
+              <div key={a.id} onClick={() => setSelectedAffinity(a.id)} style={{ background: selectedAffinity === a.id ? 'var(--bg3)' : 'var(--bg2)', border: `1px solid ${selectedAffinity === a.id ? a.color : 'var(--border)'}`, borderTop: selectedAffinity === a.id ? `2px solid ${a.color}` : `1px solid var(--border)`, borderRadius: '8px', padding: '14px 10px', cursor: 'pointer', boxShadow: selectedAffinity === a.id ? `0 0 20px ${a.color}33` : 'none' }}>
+                <div style={{ fontSize: '26px', marginBottom: '6px' }}>{a.icon}</div>
+                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '1px', color: 'var(--gold-light)', marginBottom: '6px' }}>{a.name.toUpperCase()}</div>
+                <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+                  {Object.entries(a.bonus).map(([k, v]) => (
+                    <span key={k} style={{ fontSize: '8px', color: '#27ae60', background: 'rgba(39,174,96,0.1)', borderRadius: '3px', padding: '1px 4px' }}>+{v} {k.toUpperCase()}</span>
+                  ))}
                 </div>
               </div>
             ))}
@@ -442,139 +445,136 @@ export default function CharCreate() {
         </div>
       )}
 
-      {step === 3 && (
-        <div style={{ padding: '20px 24px 0', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '8px' }}>
-              YOUR NAME
+      {/* ── STEP 3: ATTRIBUTES ── */}
+      {step === 3 && cls && (
+        <div style={{ padding: '16px 20px 0', flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)' }}>DISTRIBUTE ATTRIBUTES</div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: pointsLeft === 0 ? '#27ae60' : pointsLeft < 10 ? '#f39c12' : 'var(--gold)', letterSpacing: '1px' }}>
+              {pointsLeft} pts left
             </div>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Enter your name..."
-              maxLength={24}
-              style={{
-                width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)',
-                borderRadius: '4px', padding: '12px 16px', color: 'var(--gold-light)',
-                fontSize: '18px', outline: 'none'
-              }}
-            />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {ATTRS.map(attr => {
+              const base = baseAttrs[attr.id]
+              const final = finalAttrs[attr.id] || 0
+              const cap = getCap(attr.id)
+              const bonus = final - base
+              const pct = Math.min(100, (final / (cap + 30)) * 100)
+
+              return (
+                <div key={attr.id} style={{ background: 'var(--bg2)', border: `1px solid ${attr.color}33`, borderRadius: '8px', padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '14px' }}>{attr.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--gold-light)', letterSpacing: '1px' }}>{attr.name.toUpperCase()}</div>
+                      <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontStyle: 'italic' }}>{attr.desc}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button onClick={() => adjustAttr(attr.id, -1)} style={{ width: '22px', height: '22px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>−</button>
+                      <div style={{ textAlign: 'center', minWidth: '36px' }}>
+                        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '16px', color: attr.color, fontWeight: 'bold' }}>{final}</span>
+                        {bonus !== 0 && <span style={{ fontSize: '9px', color: bonus > 0 ? '#27ae60' : '#c0392b', marginLeft: '2px' }}>{bonus > 0 ? `+${bonus}` : bonus}</span>}
+                      </div>
+                      <button onClick={() => adjustAttr(attr.id, 1)} disabled={pointsLeft <= 0 || base >= cap} style={{ width: '22px', height: '22px', background: pointsLeft <= 0 || base >= cap ? 'var(--bg2)' : 'var(--bg3)', border: `1px solid ${pointsLeft <= 0 || base >= cap ? 'var(--border)' : attr.color + '66'}`, borderRadius: '4px', color: pointsLeft <= 0 || base >= cap ? '#3a3050' : attr.color, fontSize: '14px', cursor: pointsLeft <= 0 || base >= cap ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>+</button>
+                    </div>
+                  </div>
+                  <div style={{ height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: attr.color, transition: 'width 0.2s', borderRadius: '2px' }} />
+                  </div>
+                  {cls.attrCaps?.[attr.id] && (
+                    <div style={{ fontSize: '8px', color: '#c0392b44', marginTop: '2px', textAlign: 'right' }}>cap: {cap}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <div style={{ marginTop: '12px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '1px' }}>COMPUTED HP</div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '14px', color: '#e74c3c' }}>❤️ {computedHp}</div>
+          </div>
+
+          {pointsLeft > 0 && (
+            <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '9px', color: '#f39c12', letterSpacing: '1px', textAlign: 'center' }}>
+              Spend all {pointsLeft} remaining point{pointsLeft !== 1 ? 's' : ''} to continue
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── STEP 4: IDENTITY ── */}
+      {step === 4 && (
+        <div style={{ padding: '16px 20px 0', flex: 1, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>YOUR NAME</div>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Enter your name..." maxLength={24}
+              style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--gold-light)', fontSize: '17px', outline: 'none', boxSizing: 'border-box' }} />
           </div>
 
           <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '8px' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>
               APPEARANCE <span style={{ color: '#3a3050' }}>— OPTIONAL</span>
             </div>
-            <textarea
-              value={appearance}
-              onChange={e => setAppearance(e.target.value)}
-              placeholder="Describe how your character looks... (hair, eyes, build, clothing, scars etc.)"
-              maxLength={300}
-              rows={3}
-              style={{
-                width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)',
-                borderRadius: '4px', padding: '12px 16px', color: 'var(--text)',
-                fontSize: '14px', outline: 'none', resize: 'none', lineHeight: 1.5,
-                fontFamily: "'EB Garamond', serif"
-              }}
-            />
+            <textarea value={appearance} onChange={e => setAppearance(e.target.value)}
+              placeholder="Describe your character's looks... (hair, eyes, build, scars etc.)" maxLength={300} rows={3}
+              style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--text)', fontSize: '13px', outline: 'none', resize: 'none', lineHeight: 1.5, fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }} />
           </div>
 
           <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '8px' }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>
               BACKSTORY <span style={{ color: '#3a3050' }}>— OPTIONAL</span>
             </div>
-            <textarea
-              value={backstory}
-              onChange={e => setBackstory(e.target.value)}
-              placeholder="Who are you? What drives you? What secrets do you carry..."
-              maxLength={500}
-              rows={4}
-              style={{
-                width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)',
-                borderRadius: '4px', padding: '12px 16px', color: 'var(--text)',
-                fontSize: '14px', outline: 'none', resize: 'none', lineHeight: 1.5,
-                fontFamily: "'EB Garamond', serif"
-              }}
-            />
+            <textarea value={backstory} onChange={e => setBackstory(e.target.value)}
+              placeholder="Who are you? What drives you? What secrets do you carry..." maxLength={500} rows={4}
+              style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--text)', fontSize: '13px', outline: 'none', resize: 'none', lineHeight: 1.5, fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }} />
           </div>
 
-          {selectedClass && selectedRace && selectedAffinity && (
-            <div style={{
-              background: 'var(--bg2)', border: '1px solid var(--border)',
-              borderRadius: '8px', padding: '16px'
-            }}>
-              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
-                CHARACTER SUMMARY
+          {/* Final summary */}
+          {cls && race && affinity && (
+            <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px' }}>
+              <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '10px' }}>CHARACTER SUMMARY</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                {[
+                  { icon: cls.icon, label: cls.name, color: cls.color },
+                  { icon: race.icon, label: race.name, color: 'var(--gold)' },
+                  { icon: affinity.icon, label: affinity.name, color: affinity.color },
+                ].map(item => (
+                  <div key={item.label} style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '5px 10px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: item.color }}>
+                    {item.icon} {item.label}
+                  </div>
+                ))}
               </div>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                <div style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '6px 12px', fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)' }}>
-                  {CLASSES.find(c => c.id === selectedClass)?.icon} {CLASSES.find(c => c.id === selectedClass)?.name}
-                </div>
-                <div style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '6px 12px', fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)' }}>
-                  {RACES.find(r => r.id === selectedRace)?.icon} {RACES.find(r => r.id === selectedRace)?.name}
-                </div>
-                <div style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '6px 12px', fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)' }}>
-                  {AFFINITIES.find(a => a.id === selectedAffinity)?.icon} {AFFINITIES.find(a => a.id === selectedAffinity)?.name}
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                {ATTRS.map(attr => (
+                  <div key={attr.id} style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{attr.icon} {attr.name.slice(0, 3).toUpperCase()}</div>
+                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: '13px', color: attr.color }}>{finalAttrs[attr.id]}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: '#e74c3c', textAlign: 'center' }}>
+                ❤️ {computedHp} HP · 🪙 10 Gold
               </div>
             </div>
           )}
         </div>
       )}
 
-      <div style={{ padding: '20px 24px 32px', display: 'flex', gap: '12px' }}>
+      {/* Navigation */}
+      <div style={{ padding: '16px 20px 28px', display: 'flex', gap: '10px' }}>
         {step > 0 && (
-          <button
-            onClick={() => setStep(step - 1)}
-            style={{
-              padding: '14px 20px',
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              borderRadius: '4px',
-              color: 'var(--text-dim)',
-              fontFamily: "'Cinzel', serif",
-              fontSize: '11px',
-              letterSpacing: '2px'
-            }}>
+          <button onClick={() => setStep(step - 1)} style={{ padding: '12px 18px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>
             BACK
           </button>
         )}
-
-        {step < 3 ? (
-          <button
-            onClick={() => setStep(step + 1)}
-            disabled={!canProceed()}
-            style={{
-              flex: 1, padding: '14px',
-              background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)',
-              border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`,
-              borderRadius: '4px',
-              color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)',
-              fontFamily: "'Cinzel', serif",
-              fontSize: '13px',
-              letterSpacing: '3px',
-              boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none',
-              transition: 'all 0.3s'
-            }}>
+        {step < STEPS.length - 1 ? (
+          <button onClick={() => setStep(step + 1)} disabled={!canProceed()} style={{ flex: 1, padding: '12px', background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '3px', boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none', transition: 'all 0.3s', cursor: canProceed() ? 'pointer' : 'not-allowed' }}>
             NEXT →
           </button>
         ) : (
-          <button
-            onClick={handleBegin}
-            disabled={!canProceed() || loading}
-            style={{
-              flex: 1, padding: '14px',
-              background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)',
-              border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`,
-              borderRadius: '4px',
-              color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)',
-              fontFamily: "'Cinzel', serif",
-              fontSize: '13px',
-              letterSpacing: '3px',
-              boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none',
-              transition: 'all 0.3s'
-            }}>
+          <button onClick={handleBegin} disabled={!canProceed() || loading} style={{ flex: 1, padding: '12px', background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '3px', boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none', transition: 'all 0.3s', cursor: canProceed() && !loading ? 'pointer' : 'not-allowed' }}>
             {loading ? 'FORGING YOUR LEGEND...' : joinRoomCode ? 'JOIN THE REALM' : 'ENTER THE REALM'}
           </button>
         )}
