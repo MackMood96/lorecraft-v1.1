@@ -4,8 +4,9 @@ import { useGame } from '../context/GameContext'
 import { supabase } from '../supabase'
 import DiceRoll from '../components/DiceRoll'
 
-// ─── VOICE POOLS ────────────────────────────────────────────────────────────
+// ─── VOICE CONFIG ────────────────────────────────────────────────────────────
 const NARRATOR_VOICE = 'Charon'
+const NARRATOR_LABEL = 'Narrator'
 
 // ─── RARITY CONFIG ───────────────────────────────────────────────────────────
 const RARITIES = {
@@ -125,7 +126,7 @@ If a player attempts a class-restricted action, refuse narratively and suggest a
 
 ATTRIBUTE SYSTEM — Use to determine outcomes. Always roll dice for uncertain actions:
 - STR: Melee attacks, breaking things, intimidation
-- DEX: Stealth, ranged attacks, dodging, lockpicking  
+- DEX: Stealth, ranged attacks, dodging, lockpicking
 - INT: Spells, knowledge, puzzles, arcane detection
 - VIT: Endurance, resisting poison/disease
 - CHA: Persuasion, deception, NPC reactions, trading
@@ -135,7 +136,7 @@ DICE ROLLING — CRITICAL:
 - Roll dice for ALL uncertain outcomes. Format: "Rolling d20... [X]!"
 - High attribute = better odds. Low attribute = worse odds.
 - Critical success (18-20): exceptional outcome
-- Success (11-17): action succeeds  
+- Success (11-17): action succeeds
 - Partial (6-10): succeeds with complication
 - Failure (1-5): action fails, possible consequence
 
@@ -174,15 +175,16 @@ When gold changes due to valid transaction:
 Quest rewards as Vault rolls:
 <grant_roll>{"player":"Name"}</grant_roll>
 
-DIALOGUE FORMATTING:
+DIALOGUE FORMATTING — CRITICAL:
 - NPC dialogue MUST be on its own separate paragraph.
 - NEVER mix narration and NPC dialogue in same paragraph.
+- NPC speech format: NpcName: "words here"
+- NEVER use asterisks around data tags. Use ONLY XML angle bracket format.
 
 NPC DATA — first appearance only:
 <npc_data>{"name":"NpcName","gender":"male|female","voice":"VoiceName","race":"Race","role":"Role","description":"appearance and personality"}</npc_data>
 Male voices: Fenrir (warrior/villain), Orus (merchant/elder), Achird (mysterious/mage)
 Female voices: Kore (mysterious/mage), Aoede (noble/elf), Leda (warrior/ranger)
-NPC speech format: NpcName: "words here"
 
 KNOWN NPCS:
 {{NPC_ROSTER}}`
@@ -252,7 +254,6 @@ function parseGrantRoll(text) {
 }
 
 function parseDiceRoll(text) {
-  // Detect DM dice rolls e.g. "Rolling d20... [14]!"
   const match = text.match(/[Rr]olling d(\d+)\.\.\.?\s*\[(\d+)\]/i)
   if (!match) return null
   return { sides: parseInt(match[1]), result: parseInt(match[2]) }
@@ -265,39 +266,151 @@ function cleanText(text) {
     .replace(/<inventory_add>[\s\S]*?<\/inventory_add>/g, '')
     .replace(/<inventory_remove>[\s\S]*?<\/inventory_remove>/g, '')
     .replace(/<grant_roll>[\s\S]*?<\/grant_roll>/g, '')
+    .replace(/\*npc_data\([\s\S]*?\)\*/g, '')
+    .replace(/\*state_update\([\s\S]*?\)\*/g, '')
+    .replace(/\*inventory_add\([\s\S]*?\)\*/g, '')
+    .replace(/\*inventory_remove\([\s\S]*?\)\*/g, '')
     .trim()
 }
 
-function detectNpcInParagraph(paragraph, npcData) {
-  for (const [name, data] of Object.entries(npcData)) {
-    if (paragraph.trim().startsWith(`${name}:`)) {
-      return { npcName: name, npcVoice: data.voice || data }
-    }
-  }
-  return null
+function buildNpcRoster(npcData) {
+  const npcs = Object.values(npcData)
+  if (npcs.length === 0) return 'None yet.'
+  return npcs.map(n => `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`).join('\n')
 }
 
-async function generateParagraphTTS(paragraph, npcData) {
-  const npc = detectNpcInParagraph(paragraph, npcData)
-  let body
-  if (npc) {
-    body = {
-      contents: [{ parts: [{ text: paragraph.replace(`${npc.npcName}:`, '').trim() }] }],
-      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: npc.npcVoice } } } }
+// ─── MULTI-SPEAKER TTS ───────────────────────────────────────────────────────
+// Analyses the DM text and builds ONE TTS request covering the whole response.
+// Three cases:
+//   1. Pure narration only       → single speaker Charon
+//   2. Pure NPC dialogue only    → single speaker NPC voice
+//   3. Mixed narration + NPC     → multi-speaker (max 2: Narrator + 1 NPC)
+//
+// Lines that are meta/suggested-actions (*italics*) are stripped before sending.
+
+function buildTtsPayload(text, npcData) {
+  // Strip suggested actions (*...*) and blank lines
+  const lines = text
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && !l.startsWith('*') && !l.endsWith('*'))
+
+  if (lines.length === 0) return null
+
+  // Detect which NPC speaks (only support 1 NPC per response per multi-speaker limit)
+  let npcName = null
+  let npcVoice = null
+
+  for (const line of lines) {
+    for (const [name, data] of Object.entries(npcData)) {
+      if (line.startsWith(`${name}:`)) {
+        const voice = typeof data === 'string' ? data : data.voice
+        if (voice && typeof voice === 'string') {
+          npcName = name
+          npcVoice = voice
+          break
+        }
+      }
     }
-  } else {
-    body = {
-      contents: [{ parts: [{ text: `Read this like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet wonder and gravitas. British accent: ${paragraph}` }] }],
-      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: NARRATOR_VOICE } } } }
+    if (npcName) break
+  }
+
+  const hasNarration = lines.some(l => !npcName || !l.startsWith(`${npcName}:`))
+  const hasNpc = npcName !== null
+
+  // ── Case 1: Pure narration ──
+  if (!hasNpc) {
+    return {
+      type: 'single',
+      voice: NARRATOR_VOICE,
+      text: `Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet gravitas. British accent.\n\n${lines.join('\n')}`,
     }
   }
+
+  // ── Case 2: Pure NPC dialogue ──
+  if (hasNpc && !hasNarration) {
+    const npcLines = lines
+      .filter(l => l.startsWith(`${npcName}:`))
+      .map(l => l.replace(`${npcName}:`, '').trim())
+      .join(' ')
+    return {
+      type: 'single',
+      voice: npcVoice,
+      text: npcLines,
+    }
+  }
+
+  // ── Case 3: Mixed — multi-speaker ──
+  // Label each line with Narrator or NpcName
+  const labeled = lines.map(l => {
+    if (l.startsWith(`${npcName}:`)) {
+      return `${npcName}: ${l.replace(`${npcName}:`, '').trim()}`
+    }
+    return `${NARRATOR_LABEL}: ${l}`
+  }).join('\n')
+
+  return {
+    type: 'multi',
+    npcName,
+    npcVoice,
+    text: labeled,
+  }
+}
+
+async function generateMultiSpeakerTTS(text, npcData) {
+  const payload = buildTtsPayload(text, npcData)
+  if (!payload) return null
+
+  let body
+
+  if (payload.type === 'single') {
+    body = {
+      contents: [{ parts: [{ text: payload.text }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: payload.voice }
+          }
+        }
+      }
+    }
+  } else {
+    // Multi-speaker
+    body = {
+      contents: [{ parts: [{ text: payload.text }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              {
+                speaker: NARRATOR_LABEL,
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: NARRATOR_VOICE } }
+              },
+              {
+                speaker: payload.npcName,
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: payload.npcVoice } }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+
   const response = await fetch(
-   `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
   )
+
   const data = await response.json()
   if (data.error) throw new Error(data.error.message)
-  return data.candidates[0].content.parts[0].inlineData.data
+
+  const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
+  if (!audioPart) throw new Error('No audio in response')
+
+  return audioPart.inlineData.data
 }
 
 function playBase64Audio(base64Pcm, audioRef) {
@@ -306,12 +419,6 @@ function playBase64Audio(base64Pcm, audioRef) {
   const audio = new Audio(url)
   if (audioRef) audioRef.current = audio
   return audio
-}
-
-function buildNpcRoster(npcData) {
-  const npcs = Object.values(npcData)
-  if (npcs.length === 0) return 'None yet.'
-  return npcs.map(n => `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`).join('\n')
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
@@ -329,14 +436,12 @@ export default function Game() {
     return () => window.removeEventListener('resize', handle)
   }, [])
 
-  // ─── SCENE STATE ──────────────────────────────────────────────────────────
   const [sceneUrl, setSceneUrl] = useState('')
   const [sceneLoading, setSceneLoading] = useState(false)
   const [sceneLabel, setSceneLabel] = useState('Adventure Begins')
   const [sceneVisible, setSceneVisible] = useState(true)
   const lastDmTextRef = useRef('')
 
-  // ─── INVENTORY / TRADE STATE ──────────────────────────────────────────────
   const [showInventory, setShowInventory] = useState(false)
   const [inventoryTab, setInventoryTab] = useState('items')
   const [vaultRolling, setVaultRolling] = useState(false)
@@ -346,7 +451,6 @@ export default function Game() {
   const [tradeMsg, setTradeMsg] = useState('')
   const [tradeLoading, setTradeLoading] = useState(false)
 
-  // ─── GAME STATE ───────────────────────────────────────────────────────────
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [showRoomCode, setShowRoomCode] = useState(false)
@@ -427,22 +531,21 @@ export default function Game() {
 
     const audioChannel = supabase.channel(`audio:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
-      const audioQueue = []; let isPlaying = false
-      const playNext = async () => {
-        if (isPlaying || audioQueue.length === 0) return
+      let isPlaying = false
+      const playNext = async (base64Pcm) => {
+        if (isPlaying) return
         isPlaying = true
-        const base64Pcm = audioQueue.shift()
         try {
           const audio = playBase64Audio(base64Pcm, currentAudioRef)
           setTtsStatus('playing')
           await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
         } catch (e) { console.log('Audio error:', e) }
         isPlaying = false
-        if (audioQueue.length > 0) playNext(); else setTtsStatus('idle')
+        setTtsStatus('idle')
       }
-      audioChannel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => { if (mutedRef.current) return; audioQueue.push(payload.base64Pcm); playNext() })
+      audioChannel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => { if (mutedRef.current) return; playNext(payload.base64Pcm) })
       audioChannel.on('broadcast', { event: 'audio_start' }, () => setTtsStatus('loading'))
-      audioChannel.on('broadcast', { event: 'audio_end' }, () => { if (audioQueue.length === 0) setTtsStatus('idle') })
+      audioChannel.on('broadcast', { event: 'audio_end' }, () => setTtsStatus('idle'))
     }
     audioChannel.subscribe()
     audioChannelRef.current = audioChannel
@@ -450,39 +553,35 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
-  // ─── HOST TTS PIPELINE ────────────────────────────────────────────────────
+  // ─── HOST TTS — SINGLE REQUEST ────────────────────────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
-    const clean = text.replace(/<[^>]+>/g, '').trim()
+    const clean = cleanText(text)
     if (!clean) return
-    const paragraphs = clean.split(/\n+/).filter(p => p.trim().length > 0)
-    const chunks = paragraphs.length > 0 ? paragraphs : [clean]
+
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
     setTtsStatus('loading')
-    const generated = new Array(chunks.length).fill(null)
-    let playIndex = 0
-    const genPromises = chunks.map((chunk, i) =>
-      generateParagraphTTS(chunk, npcDataRef.current)
-        .then(base64 => { generated[i] = base64 })
-        .catch(e => { console.log(`TTS chunk ${i} failed:`, e); generated[i] = 'failed' })
-    )
-    const playInOrder = async () => {
-      while (playIndex < chunks.length) {
-        while (generated[playIndex] === null) { await new Promise(r => setTimeout(r, 100)) }
-        if (mutedRef.current) break
-        const base64Pcm = generated[playIndex]
-        if (base64Pcm && base64Pcm !== 'failed') {
-          audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
-          const audio = playBase64Audio(base64Pcm, currentAudioRef)
-          setTtsStatus('playing')
-          await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
-        }
-        playIndex++
-      }
+
+    try {
+      const base64Pcm = await generateMultiSpeakerTTS(clean, npcDataRef.current)
+      if (!base64Pcm) { setTtsStatus('idle'); return }
+
+      if (mutedRef.current) { setTtsStatus('idle'); return }
+
+      // Broadcast to guests
+      audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
+
+      // Play locally for host
+      const audio = playBase64Audio(base64Pcm, currentAudioRef)
+      setTtsStatus('playing')
+      await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
+    } catch (e) {
+      console.log('TTS failed:', e)
       setTtsStatus('idle')
-      audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
     }
-    await Promise.all([Promise.all(genPromises), playInOrder()])
+
+    setTtsStatus('idle')
+    audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
   }
 
   function playMusic(mood) {
@@ -576,7 +675,6 @@ export default function Game() {
         hostGenerateAndBroadcastAudio(msg.content)
         playMusic(detectMood(msg.content))
         hostGenerateAndBroadcastScene(msg.content)
-        // Detect dice roll in DM message and show animation
         const roll = parseDiceRoll(msg.content)
         if (roll) rollDice(roll.sides, 0, 'Fate decides...')
       }
@@ -652,7 +750,6 @@ export default function Game() {
   }
 
   async function processDmResponse(raw) {
-    // NPC portrait
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
       const { portraitUrl } = await hostGenerateNpcPortrait(npc)
@@ -661,11 +758,9 @@ export default function Game() {
       await saveNpcData(updated)
     }
 
-    // State update (HP/gold from valid transactions)
     const stateUpdate = parseStateUpdate(raw)
     if (stateUpdate) updateGameState(stateUpdate)
 
-    // Inventory adds — persist to Supabase via context
     const adds = parseInventoryAdd(raw)
     for (const add of adds) {
       if (add.player === player?.name) {
@@ -673,7 +768,6 @@ export default function Game() {
       }
     }
 
-    // Inventory removes — persist to Supabase via context
     const removes = parseInventoryRemove(raw)
     for (const remove of removes) {
       if (remove.player === player?.name) {
@@ -681,7 +775,6 @@ export default function Game() {
       }
     }
 
-    // Grant vault roll
     const grantRoll = parseGrantRoll(raw)
     if (grantRoll?.player === player?.name) {
       setVaultRollsAvailable(v => v + 1)
@@ -723,8 +816,6 @@ export default function Game() {
 
   function quickAction(text) { setInput(text); setTimeout(() => sendMessage(), 100) }
 
-  // ─── PLAYER-TO-PLAYER TRADE ───────────────────────────────────────────────
-  // Format: /give @PlayerName item name  OR  /give @PlayerName 10 gold
   async function handleTrade() {
     const trimmed = tradeInput.trim()
     if (!trimmed.startsWith('/give')) { setTradeMsg('Use: /give @PlayerName item name'); return }
@@ -733,34 +824,21 @@ export default function Game() {
     const toName = parts[1]
     const what = parts[2].trim()
     if (toName === player?.name) { setTradeMsg("You can't give items to yourself."); return }
-
     setTradeLoading(true); setTradeMsg('')
-
-    // Check if it's gold: /give @Player 10 gold
     const goldMatch = what.match(/^(\d+)\s+gold$/i)
     if (goldMatch) {
       const amount = parseInt(goldMatch[1])
       const result = await giveGoldToPlayer(amount, toName, campaignId)
-      if (result.success) {
-        setTradeMsg(`✓ Gave ${amount} gold to ${toName}`)
-        await saveMessage('player', `${player?.name} gives ${amount} 🪙 gold to ${toName}`, player?.name)
-      } else {
-        setTradeMsg(`✗ ${result.error}`)
-      }
+      if (result.success) { setTradeMsg(`✓ Gave ${amount} gold to ${toName}`); await saveMessage('player', `${player?.name} gives ${amount} 🪙 gold to ${toName}`, player?.name) }
+      else setTradeMsg(`✗ ${result.error}`)
     } else {
       const result = await giveItemToPlayer(what, toName, campaignId)
-      if (result.success) {
-        setTradeMsg(`✓ Gave ${result.item} to ${toName}`)
-        await saveMessage('player', `${player?.name} gives ${result.item} to ${toName}`, player?.name)
-      } else {
-        setTradeMsg(`✗ ${result.error}`)
-      }
+      if (result.success) { setTradeMsg(`✓ Gave ${result.item} to ${toName}`); await saveMessage('player', `${player?.name} gives ${result.item} to ${toName}`, player?.name) }
+      else setTradeMsg(`✗ ${result.error}`)
     }
-    setTradeLoading(false)
-    setTradeInput('')
+    setTradeLoading(false); setTradeInput('')
   }
 
-  // ─── VAULT ────────────────────────────────────────────────────────────────
   async function rollVault(type) {
     if (vaultRolling) return
     if (vaultRollsAvailable <= 0 && gameState.gold < 50) return
@@ -791,7 +869,6 @@ export default function Game() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden', position: 'relative' }}>
 
-      {/* ── DICE ROLL OVERLAY ── */}
       {currentRoll && <DiceRoll roll={currentRoll} onDismiss={() => setCurrentRoll(null)} />}
 
       {/* ── HEADER ── */}
@@ -1024,16 +1101,9 @@ export default function Game() {
                     <span style={{ color: 'var(--gold)' }}>/give @PlayerName Iron Sword</span><br/>
                     <span style={{ color: 'var(--gold)' }}>/give @PlayerName 10 gold</span>
                   </div>
-                  <input
-                    value={tradeInput}
-                    onChange={e => { setTradeInput(e.target.value); setTradeMsg('') }}
-                    onKeyDown={e => { if (e.key === 'Enter') handleTrade() }}
-                    placeholder="/give @PlayerName item or gold"
-                    style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text)', fontSize: '13px', outline: 'none', fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }}
-                  />
-                  {tradeMsg && (
-                    <div style={{ fontSize: '11px', color: tradeMsg.startsWith('✓') ? '#27ae60' : '#e74c3c', fontStyle: 'italic' }}>{tradeMsg}</div>
-                  )}
+                  <input value={tradeInput} onChange={e => { setTradeInput(e.target.value); setTradeMsg('') }} onKeyDown={e => { if (e.key === 'Enter') handleTrade() }} placeholder="/give @PlayerName item or gold"
+                    style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text)', fontSize: '13px', outline: 'none', fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }} />
+                  {tradeMsg && <div style={{ fontSize: '11px', color: tradeMsg.startsWith('✓') ? '#27ae60' : '#e74c3c', fontStyle: 'italic' }}>{tradeMsg}</div>}
                   <button onClick={handleTrade} disabled={tradeLoading || !tradeInput.trim()} style={{ padding: '10px', background: tradeInput.trim() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${tradeInput.trim() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '6px', color: tradeInput.trim() ? 'var(--gold)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: tradeInput.trim() ? 'pointer' : 'not-allowed' }}>
                     {tradeLoading ? 'TRADING...' : 'SEND →'}
                   </button>
@@ -1042,9 +1112,7 @@ export default function Game() {
                     {players.filter(p => p !== player?.name).length === 0
                       ? <div style={{ fontSize: '11px', color: '#3a3050', fontStyle: 'italic' }}>No other players in party</div>
                       : players.filter(p => p !== player?.name).map(p => (
-                          <div key={p} onClick={() => setTradeInput(`/give @${p} `)} style={{ padding: '6px 0', fontSize: '12px', color: 'var(--gold-light)', cursor: 'pointer', borderBottom: '1px solid rgba(201,168,76,0.08)' }}>
-                            ⚔️ {p}
-                          </div>
+                          <div key={p} onClick={() => setTradeInput(`/give @${p} `)} style={{ padding: '6px 0', fontSize: '12px', color: 'var(--gold-light)', cursor: 'pointer', borderBottom: '1px solid rgba(201,168,76,0.08)' }}>⚔️ {p}</div>
                         ))
                     }
                   </div>
