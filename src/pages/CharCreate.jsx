@@ -183,9 +183,9 @@ export default function CharCreate() {
     return cls.attrCaps?.[attrId] ?? ATTR_MAX_BASE
   }
 
-  function adjustAttr(attrId, delta) {
+  function handleSlider(attrId, newVal) {
     const current = baseAttrs[attrId]
-    const newVal = current + delta
+    const delta = newVal - current
     if (newVal < ATTR_MIN) return
     if (newVal > getCap(attrId)) return
     if (delta > 0 && pointsLeft <= 0) return
@@ -250,14 +250,11 @@ export default function CharCreate() {
     }
   }
 
-  // ─── KEY FIX: host and guest navigate back differently ────────────────────
   function handleEnterRealm() {
     if (!createdPlayer || !campaignId) return
     if (isHost) {
-      // Host returns to lobby — no room param, no guest flag
       navigate(`/lobby?campaignId=${campaignId}`)
     } else {
-      // Guest returns to lobby — pass room code AND guest flag
       navigate(`/lobby?campaignId=${campaignId}&room=${joinRoomCode}&guest=true`)
     }
   }
@@ -401,44 +398,68 @@ export default function CharCreate() {
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)' }}>DISTRIBUTE ATTRIBUTES</div>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: pointsLeft === 0 ? '#27ae60' : pointsLeft < 10 ? '#f39c12' : 'var(--gold)', letterSpacing: '1px' }}>{pointsLeft} pts left</div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {ATTRS.map(attr => {
               const base = baseAttrs[attr.id]
               const final = finalAttrs[attr.id] || 0
               const cap = getCap(attr.id)
               const bonus = final - base
-              const pct = Math.min(100, (final / (cap + 30)) * 100)
+              const fillPct = ((base - ATTR_MIN) / (cap - ATTR_MIN)) * 100
+
               return (
                 <div key={attr.id} style={{ background: 'var(--bg2)', border: `1px solid ${attr.color}33`, borderRadius: '8px', padding: '10px 12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '14px' }}>{attr.icon}</span>
+                  {/* Row: icon + name + value */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '16px' }}>{attr.icon}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontFamily: "'Cinzel', serif", fontSize: '10px', color: 'var(--gold-light)', letterSpacing: '1px' }}>{attr.name.toUpperCase()}</div>
                       <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontStyle: 'italic' }}>{attr.desc}</div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <button onClick={() => adjustAttr(attr.id, -1)} style={{ width: '22px', height: '22px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>−</button>
-                      <div style={{ textAlign: 'center', minWidth: '36px' }}>
-                        <span style={{ fontFamily: "'Cinzel', serif", fontSize: '16px', color: attr.color, fontWeight: 'bold' }}>{final}</span>
-                        {bonus !== 0 && <span style={{ fontSize: '9px', color: bonus > 0 ? '#27ae60' : '#c0392b', marginLeft: '2px' }}>{bonus > 0 ? `+${bonus}` : bonus}</span>}
-                      </div>
-                      <button onClick={() => adjustAttr(attr.id, 1)} disabled={pointsLeft <= 0 || base >= cap} style={{ width: '22px', height: '22px', background: pointsLeft <= 0 || base >= cap ? 'var(--bg2)' : 'var(--bg3)', border: `1px solid ${pointsLeft <= 0 || base >= cap ? 'var(--border)' : attr.color + '66'}`, borderRadius: '4px', color: pointsLeft <= 0 || base >= cap ? '#3a3050' : attr.color, fontSize: '14px', cursor: pointsLeft <= 0 || base >= cap ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>+</button>
+                    <div style={{ textAlign: 'right', minWidth: '48px' }}>
+                      <span style={{ fontFamily: "'Cinzel', serif", fontSize: '18px', color: attr.color, fontWeight: 'bold' }}>{final}</span>
+                      {bonus !== 0 && (
+                        <span style={{ fontSize: '9px', color: bonus > 0 ? '#27ae60' : '#c0392b', marginLeft: '3px' }}>
+                          {bonus > 0 ? `+${bonus}` : bonus}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div style={{ height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                    <div style={{ width: `${pct}%`, height: '100%', background: attr.color, transition: 'width 0.2s', borderRadius: '2px' }} />
-                  </div>
+
+                  {/* Slider */}
+                  <input
+                    type="range"
+                    min={ATTR_MIN}
+                    max={cap}
+                    value={base}
+                    onChange={e => handleSlider(attr.id, parseInt(e.target.value))}
+                    style={{
+                      width: '100%',
+                      height: '4px',
+                      WebkitAppearance: 'none',
+                      appearance: 'none',
+                      borderRadius: '2px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      background: `linear-gradient(to right, ${attr.color} 0%, ${attr.color} ${fillPct}%, rgba(255,255,255,0.08) ${fillPct}%, rgba(255,255,255,0.08) 100%)`,
+                    }}
+                  />
+
+                  {/* Cap label */}
                   {cls.attrCaps?.[attr.id] && (
-                    <div style={{ fontSize: '8px', color: '#c0392b44', marginTop: '2px', textAlign: 'right' }}>cap: {cap}</div>
+                    <div style={{ fontSize: '8px', color: '#c0392b55', marginTop: '3px', textAlign: 'right' }}>cap: {cap}</div>
                   )}
                 </div>
               )
             })}
           </div>
+
+          {/* HP display */}
           <div style={{ marginTop: '12px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '1px' }}>COMPUTED HP</div>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '14px', color: '#e74c3c' }}>❤️ {computedHp}</div>
           </div>
+
           {pointsLeft > 0 && (
             <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '9px', color: '#f39c12', letterSpacing: '1px', textAlign: 'center' }}>
               Spend all {pointsLeft} remaining point{pointsLeft !== 1 ? 's' : ''} to continue
@@ -500,6 +521,42 @@ export default function CharCreate() {
           </button>
         )}
       </div>
+
+      <style>{`
+        input[type=range] {
+          -webkit-appearance: none;
+          appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: var(--gold);
+          cursor: pointer;
+          border: 2px solid #0a0812;
+          box-shadow: 0 0 8px rgba(201,168,76,0.6);
+          margin-top: -6px;
+        }
+        input[type=range]::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: var(--gold);
+          cursor: pointer;
+          border: 2px solid #0a0812;
+          box-shadow: 0 0 8px rgba(201,168,76,0.6);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+          height: 4px;
+          border-radius: 2px;
+        }
+        input[type=range]::-moz-range-track {
+          height: 4px;
+          border-radius: 2px;
+          background: transparent;
+        }
+      `}</style>
     </div>
   )
 }
