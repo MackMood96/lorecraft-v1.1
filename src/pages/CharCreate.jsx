@@ -34,7 +34,7 @@ const CLASSES = [
       accessory: { name: 'Thieves Tools', icon: '🔧', type: 'accessory', stats: { lck: 3 } },
     },
     consumables: [{ name: 'Smoke Bomb', icon: '💨', qty: 2 }],
-    allowedWeapons: ['dagger', 'shortbow', 'shortword'],
+    allowedWeapons: ['dagger', 'shortbow', 'shortsword'],
     allowedArmor: ['light'],
   },
   {
@@ -73,14 +73,14 @@ const CLASSES = [
 
 // ─── RACES ───────────────────────────────────────────────────────────────────
 const RACES = [
-  { id: 'human',      name: 'Human',      icon: '👤', desc: 'Versatile and ambitious',    bonus: { str: 5, dex: 5, int: 5, vit: 5, cha: 5, lck: 5 } },
-  { id: 'elf',        name: 'Elf',        icon: '🧝', desc: 'Graceful and long-lived',    bonus: { dex: 10, int: 5 } },
-  { id: 'dwarf',      name: 'Dwarf',      icon: '⛏️', desc: 'Sturdy and resilient',       bonus: { vit: 10, str: 5 } },
-  { id: 'orc',        name: 'Orc',        icon: '💪', desc: 'Powerful and fierce',         bonus: { str: 15, cha: -5 } },
-  { id: 'halfling',   name: 'Halfling',   icon: '🍀', desc: 'Lucky and nimble',            bonus: { lck: 10, dex: 5 } },
-  { id: 'tiefling',   name: 'Tiefling',   icon: '😈', desc: 'Infernal and charismatic',   bonus: { cha: 10, int: 5 } },
-  { id: 'dragonborn', name: 'Dragonborn', icon: '🐉', desc: 'Draconic and proud',          bonus: { str: 10, vit: 5 } },
-  { id: 'undead',     name: 'Undead',     icon: '💀', desc: 'Cursed and relentless',       bonus: { vit: 10, cha: -10, lck: 5 } },
+  { id: 'human',      name: 'Human',      icon: '👤', desc: 'Versatile and ambitious',   bonus: { str: 5, dex: 5, int: 5, vit: 5, cha: 5, lck: 5 } },
+  { id: 'elf',        name: 'Elf',        icon: '🧝', desc: 'Graceful and long-lived',   bonus: { dex: 10, int: 5 } },
+  { id: 'dwarf',      name: 'Dwarf',      icon: '⛏️', desc: 'Sturdy and resilient',      bonus: { vit: 10, str: 5 } },
+  { id: 'orc',        name: 'Orc',        icon: '💪', desc: 'Powerful and fierce',        bonus: { str: 15, cha: -5 } },
+  { id: 'halfling',   name: 'Halfling',   icon: '🍀', desc: 'Lucky and nimble',           bonus: { lck: 10, dex: 5 } },
+  { id: 'tiefling',   name: 'Tiefling',   icon: '😈', desc: 'Infernal and charismatic',  bonus: { cha: 10, int: 5 } },
+  { id: 'dragonborn', name: 'Dragonborn', icon: '🐉', desc: 'Draconic and proud',         bonus: { str: 10, vit: 5 } },
+  { id: 'undead',     name: 'Undead',     icon: '💀', desc: 'Cursed and relentless',      bonus: { vit: 10, cha: -10, lck: 5 } },
 ]
 
 // ─── AFFINITIES ──────────────────────────────────────────────────────────────
@@ -108,25 +108,17 @@ const ATTRS = [
 const BASE_POINTS = 100
 const ATTR_MIN = 5
 const ATTR_MAX_BASE = 60
-
 const STEPS = ['Class', 'Race', 'Affinity', 'Attributes', 'Identity']
 
 // ─── GROQ HELPERS ────────────────────────────────────────────────────────────
 async function callGroq(systemPrompt, userPrompt) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}`
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      max_tokens: 200,
-      temperature: 0.7
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      max_tokens: 200, temperature: 0.7
     })
   })
   const data = await response.json()
@@ -134,15 +126,13 @@ async function callGroq(systemPrompt, userPrompt) {
 }
 
 async function generateAvatarPrompt(cls, race, affinity, appearance) {
-  const system = `You are an expert image prompt engineer for a dark fantasy pixel art RPG game. 
+  const system = `You are an expert image prompt engineer for a dark fantasy pixel art RPG game.
 Generate a Pollinations.ai image prompt for a character portrait.
 Return ONLY the prompt text, nothing else. No quotes, no explanation.
 Style must always include: 2D pixel art, 16-bit RPG style, character portrait, dark fantasy, face and upper body, clean pixel lines, dramatic lighting`
-
   const user = `Character: ${race.name} ${cls.name} with ${affinity.name} affinity.
 ${appearance ? `Appearance: ${appearance}` : ''}
 Generate a detailed pixel art portrait prompt.`
-
   const prompt = await callGroq(system, user)
   return prompt || `2D pixel art RPG portrait, ${race.name} ${cls.name}, ${affinity.name} magic aura, dark fantasy, 16-bit style, face and upper body, dramatic lighting`
 }
@@ -151,8 +141,11 @@ Generate a detailed pixel art portrait prompt.`
 export default function CharCreate() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const campaignId = searchParams.get('campaignId')
+  const isHost = searchParams.get('host') === 'true'
   const joinRoomCode = searchParams.get('room')
-  const { setPlayer, updateGameState } = useGame()
+
+  const { setPlayer } = useGame()
 
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
@@ -164,17 +157,15 @@ export default function CharCreate() {
   const [loading, setLoading] = useState(false)
   const [avatarUrl, setAvatarUrl] = useState(null)
   const [showReveal, setShowReveal] = useState(false)
-  const [campaignData, setCampaignData] = useState(null)
+  const [createdPlayer, setCreatedPlayer] = useState(null)
   const [imageLoaded, setImageLoaded] = useState(false)
 
-  // ─── ATTRIBUTE STATE ──────────────────────────────────────────────────────
   const [baseAttrs, setBaseAttrs] = useState({ str: 5, dex: 5, int: 5, vit: 5, cha: 5, lck: 5 })
 
   const cls = CLASSES.find(c => c.id === selectedClass)
   const race = RACES.find(r => r.id === selectedRace)
   const affinity = AFFINITIES.find(a => a.id === selectedAffinity)
 
-  // ─── COMPUTED ATTRIBUTES (base + class bonus + race bonus + affinity bonus)
   const finalAttrs = useMemo(() => {
     const result = { ...baseAttrs }
     if (cls) Object.entries(cls.attrBonus).forEach(([k, v]) => { result[k] = (result[k] || 0) + v })
@@ -185,7 +176,6 @@ export default function CharCreate() {
 
   const pointsUsed = Object.values(baseAttrs).reduce((a, b) => a + b, 0) - (ATTR_MIN * 6)
   const pointsLeft = BASE_POINTS - pointsUsed
-
   const computedHp = cls ? cls.baseHp + ((finalAttrs.vit || 0) * 2) : 0
 
   function getCap(attrId) {
@@ -202,38 +192,15 @@ export default function CharCreate() {
     setBaseAttrs(prev => ({ ...prev, [attrId]: newVal }))
   }
 
-  // ─── SUBMIT ───────────────────────────────────────────────────────────────
   async function handleBegin() {
     if (!name.trim() || !cls || !race || !affinity) return
     setLoading(true)
-
     try {
-      let campaignId, roomCode
-
-      if (joinRoomCode) {
-        const { data: existing, error } = await supabase
-          .from('campaigns').select().eq('room_code', joinRoomCode).single()
-        if (error || !existing) { setLoading(false); return }
-        campaignId = existing.id
-        roomCode = joinRoomCode
-      } else {
-        const newRoomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
-        const { data: newCampaign, error } = await supabase
-          .from('campaigns')
-          .insert({ room_code: newRoomCode, name: `${name}'s Campaign` })
-          .select().single()
-        if (error) throw error
-        campaignId = newCampaign.id
-        roomCode = newRoomCode
-      }
-
-      // Build starting inventory from equipment + consumables
       const startingInventory = [
         ...Object.values(cls.equipment).filter(Boolean).map(e => `${e.icon} ${e.name}`),
         ...cls.consumables.map(c => `${c.icon} ${c.name} x${c.qty}`)
       ]
 
-      // Insert player
       const { data: player, error: playerError } = await supabase
         .from('players')
         .insert({
@@ -251,28 +218,23 @@ export default function CharCreate() {
           attributes: finalAttrs,
           equipment: cls.equipment,
           abilities: [],
+          campaign_id: campaignId || null,
         })
         .select().single()
 
       if (playerError) throw playerError
 
-      setPlayer(player)
-      updateGameState({
-        hp: computedHp,
-        maxHp: computedHp,
-        inventory: startingInventory,
-        gold: 10,
-        level: 1,
-        attributes: finalAttrs,
-        equipment: cls.equipment,
-      })
+      await setPlayer(player)
+      setCreatedPlayer(player)
 
-      // Generate avatar prompt via Groq then Pollinations
       const avatarPrompt = await generateAvatarPrompt(cls, race, affinity, appearance)
-      const seed = Math.abs(name.trim().split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) * 997 + cls.id.length * 31 + race.id.length * 17) % 99999
+      const seed = Math.abs(
+        name.trim().split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) * 997 +
+        cls.id.length * 31 + race.id.length * 17
+      ) % 99999
+
       const avatarPollUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(avatarPrompt)}?width=512&height=512&nologo=true&seed=${seed}&model=flux`
 
-      // Save avatar info to player
       await supabase.from('players').update({
         avatar_url: avatarPollUrl,
         avatar_seed: seed,
@@ -280,22 +242,23 @@ export default function CharCreate() {
       }).eq('id', player.id)
 
       setAvatarUrl(avatarPollUrl)
-      setCampaignData({ id: campaignId, roomCode, isJoin: !!joinRoomCode })
       setShowReveal(true)
       setLoading(false)
-
     } catch (e) {
       console.error(e)
       setLoading(false)
     }
   }
 
+  // ─── KEY FIX: host and guest navigate back differently ────────────────────
   function handleEnterRealm() {
-    if (!campaignData) return
-    if (campaignData.isJoin) {
-      navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}`)
+    if (!createdPlayer || !campaignId) return
+    if (isHost) {
+      // Host returns to lobby — no room param, no guest flag
+      navigate(`/lobby?campaignId=${campaignId}`)
     } else {
-      navigate(`/game/${campaignData.id}?room=${campaignData.roomCode}&host=true`)
+      // Guest returns to lobby — pass room code AND guest flag
+      navigate(`/lobby?campaignId=${campaignId}&room=${joinRoomCode}&guest=true`)
     }
   }
 
@@ -324,7 +287,6 @@ export default function CharCreate() {
           <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '3px', color: 'var(--text-dim)' }}>{race?.name} {cls?.name} · {affinity?.icon} {affinity?.name}</div>
         </div>
 
-        {/* Attribute summary */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', width: '100%', maxWidth: '320px' }}>
           {ATTRS.map(attr => (
             <div key={attr.id} style={{ background: 'var(--bg2)', border: `1px solid ${attr.color}44`, borderRadius: '6px', padding: '8px', textAlign: 'center' }}>
@@ -338,12 +300,8 @@ export default function CharCreate() {
         <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)', letterSpacing: '2px' }}>❤️ {computedHp} HP · 🪙 10 Gold</div>
 
         <button onClick={handleEnterRealm} style={{ padding: '14px 40px', background: 'linear-gradient(135deg, #2a1f0a, #3d2e10)', border: '1px solid var(--gold)', borderRadius: '4px', color: 'var(--gold-light)', fontFamily: "'Cinzel', serif", fontSize: '13px', letterSpacing: '3px', cursor: 'pointer', boxShadow: '0 0 30px rgba(201,168,76,0.2)' }}>
-          {campaignData?.isJoin ? 'JOIN THE REALM →' : 'ENTER THE REALM →'}
+          BACK TO LOBBY →
         </button>
-
-        <style>{`
-          @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        `}</style>
       </div>
     )
   }
@@ -351,26 +309,17 @@ export default function CharCreate() {
   // ─── MAIN FLOW ────────────────────────────────────────────────────────────
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflowY: 'auto' }}>
-
-      {/* Header */}
       <div style={{ padding: '20px 20px 0' }}>
-        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '18px', color: 'var(--gold-light)', letterSpacing: '2px' }}>
-          {joinRoomCode ? 'Join the Adventure' : 'Create Your Hero'}
-        </div>
-        <div style={{ fontSize: '13px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px' }}>
-          {joinRoomCode ? `Joining campaign ${joinRoomCode}` : 'Forge your legend in the realm of Lorecraft'}
-        </div>
+        <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '18px', color: 'var(--gold-light)', letterSpacing: '2px' }}>Create Your Hero</div>
+        <div style={{ fontSize: '13px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px' }}>Forge your legend in the realm of Lorecraft</div>
         <div style={{ height: '1px', background: 'linear-gradient(90deg, var(--gold), transparent)', marginTop: '10px', opacity: 0.4 }} />
       </div>
 
-      {/* Progress Steps */}
       <div style={{ padding: '14px 20px 0', display: 'flex', gap: '6px' }}>
         {STEPS.map((s, i) => (
           <div key={s} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
             <div style={{ width: '100%', height: '3px', borderRadius: '2px', background: i <= step ? 'var(--gold)' : 'var(--border)', transition: 'background 0.3s' }} />
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '1px', color: i === step ? 'var(--gold)' : i < step ? 'var(--text-dim)' : '#3a3050' }}>
-              {s.toUpperCase()}
-            </div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '1px', color: i === step ? 'var(--gold)' : i < step ? 'var(--text-dim)' : '#3a3050' }}>{s.toUpperCase()}</div>
           </div>
         ))}
       </div>
@@ -450,11 +399,8 @@ export default function CharCreate() {
         <div style={{ padding: '16px 20px 0', flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)' }}>DISTRIBUTE ATTRIBUTES</div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: pointsLeft === 0 ? '#27ae60' : pointsLeft < 10 ? '#f39c12' : 'var(--gold)', letterSpacing: '1px' }}>
-              {pointsLeft} pts left
-            </div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: pointsLeft === 0 ? '#27ae60' : pointsLeft < 10 ? '#f39c12' : 'var(--gold)', letterSpacing: '1px' }}>{pointsLeft} pts left</div>
           </div>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {ATTRS.map(attr => {
               const base = baseAttrs[attr.id]
@@ -462,7 +408,6 @@ export default function CharCreate() {
               const cap = getCap(attr.id)
               const bonus = final - base
               const pct = Math.min(100, (final / (cap + 30)) * 100)
-
               return (
                 <div key={attr.id} style={{ background: 'var(--bg2)', border: `1px solid ${attr.color}33`, borderRadius: '8px', padding: '10px 12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
@@ -490,12 +435,10 @@ export default function CharCreate() {
               )
             })}
           </div>
-
           <div style={{ marginTop: '12px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '1px' }}>COMPUTED HP</div>
             <div style={{ fontFamily: "'Cinzel', serif", fontSize: '14px', color: '#e74c3c' }}>❤️ {computedHp}</div>
           </div>
-
           {pointsLeft > 0 && (
             <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '9px', color: '#f39c12', letterSpacing: '1px', textAlign: 'center' }}>
               Spend all {pointsLeft} remaining point{pointsLeft !== 1 ? 's' : ''} to continue
@@ -512,38 +455,22 @@ export default function CharCreate() {
             <input value={name} onChange={e => setName(e.target.value)} placeholder="Enter your name..." maxLength={24}
               style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--gold-light)', fontSize: '17px', outline: 'none', boxSizing: 'border-box' }} />
           </div>
-
           <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>
-              APPEARANCE <span style={{ color: '#3a3050' }}>— OPTIONAL</span>
-            </div>
-            <textarea value={appearance} onChange={e => setAppearance(e.target.value)}
-              placeholder="Describe your character's looks... (hair, eyes, build, scars etc.)" maxLength={300} rows={3}
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>APPEARANCE <span style={{ color: '#3a3050' }}>— OPTIONAL</span></div>
+            <textarea value={appearance} onChange={e => setAppearance(e.target.value)} placeholder="Describe your character's looks..." maxLength={300} rows={3}
               style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--text)', fontSize: '13px', outline: 'none', resize: 'none', lineHeight: 1.5, fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }} />
           </div>
-
           <div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>
-              BACKSTORY <span style={{ color: '#3a3050' }}>— OPTIONAL</span>
-            </div>
-            <textarea value={backstory} onChange={e => setBackstory(e.target.value)}
-              placeholder="Who are you? What drives you? What secrets do you carry..." maxLength={500} rows={4}
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '7px' }}>BACKSTORY <span style={{ color: '#3a3050' }}>— OPTIONAL</span></div>
+            <textarea value={backstory} onChange={e => setBackstory(e.target.value)} placeholder="Who are you? What drives you?" maxLength={500} rows={4}
               style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '4px', padding: '10px 14px', color: 'var(--text)', fontSize: '13px', outline: 'none', resize: 'none', lineHeight: 1.5, fontFamily: "'EB Garamond', serif", boxSizing: 'border-box' }} />
           </div>
-
-          {/* Final summary */}
           {cls && race && affinity && (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px' }}>
               <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '10px' }}>CHARACTER SUMMARY</div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                {[
-                  { icon: cls.icon, label: cls.name, color: cls.color },
-                  { icon: race.icon, label: race.name, color: 'var(--gold)' },
-                  { icon: affinity.icon, label: affinity.name, color: affinity.color },
-                ].map(item => (
-                  <div key={item.label} style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '5px 10px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: item.color }}>
-                    {item.icon} {item.label}
-                  </div>
+                {[{ icon: cls.icon, label: cls.name, color: cls.color }, { icon: race.icon, label: race.name, color: 'var(--gold)' }, { icon: affinity.icon, label: affinity.name, color: affinity.color }].map(item => (
+                  <div key={item.label} style={{ background: 'var(--bg3)', borderRadius: '4px', padding: '5px 10px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: item.color }}>{item.icon} {item.label}</div>
                 ))}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
@@ -554,9 +481,7 @@ export default function CharCreate() {
                   </div>
                 ))}
               </div>
-              <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: '#e74c3c', textAlign: 'center' }}>
-                ❤️ {computedHp} HP · 🪙 10 Gold
-              </div>
+              <div style={{ marginTop: '8px', fontFamily: "'Cinzel', serif", fontSize: '10px', color: '#e74c3c', textAlign: 'center' }}>❤️ {computedHp} HP · 🪙 10 Gold</div>
             </div>
           )}
         </div>
@@ -565,17 +490,13 @@ export default function CharCreate() {
       {/* Navigation */}
       <div style={{ padding: '16px 20px 28px', display: 'flex', gap: '10px' }}>
         {step > 0 && (
-          <button onClick={() => setStep(step - 1)} style={{ padding: '12px 18px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>
-            BACK
-          </button>
+          <button onClick={() => setStep(step - 1)} style={{ padding: '12px 18px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>BACK</button>
         )}
         {step < STEPS.length - 1 ? (
-          <button onClick={() => setStep(step + 1)} disabled={!canProceed()} style={{ flex: 1, padding: '12px', background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '3px', boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none', transition: 'all 0.3s', cursor: canProceed() ? 'pointer' : 'not-allowed' }}>
-            NEXT →
-          </button>
+          <button onClick={() => setStep(step + 1)} disabled={!canProceed()} style={{ flex: 1, padding: '12px', background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '3px', boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none', transition: 'all 0.3s', cursor: canProceed() ? 'pointer' : 'not-allowed' }}>NEXT →</button>
         ) : (
           <button onClick={handleBegin} disabled={!canProceed() || loading} style={{ flex: 1, padding: '12px', background: canProceed() ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)', border: `1px solid ${canProceed() ? 'var(--gold)' : 'var(--border)'}`, borderRadius: '4px', color: canProceed() ? 'var(--gold-light)' : 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '12px', letterSpacing: '3px', boxShadow: canProceed() ? '0 0 30px rgba(201,168,76,0.2)' : 'none', transition: 'all 0.3s', cursor: canProceed() && !loading ? 'pointer' : 'not-allowed' }}>
-            {loading ? 'FORGING YOUR LEGEND...' : joinRoomCode ? 'JOIN THE REALM' : 'ENTER THE REALM'}
+            {loading ? 'FORGING YOUR LEGEND...' : 'ENTER THE REALM'}
           </button>
         )}
       </div>
