@@ -8,10 +8,7 @@ import DiceRoll from '../components/DiceRoll'
 const NARRATOR_VOICE = 'Charon'
 const NARRATOR_LABEL = 'Narrator'
 const NARRATOR_STYLE = 'Speak as a measured, authoritative fantasy story narrator. Deep and calm with deliberate pacing. Convey gravitas and wonder. Consistent tone throughout.'
-const TTS_MODELS = [
-  'gemini-3.1-flash-tts-preview',
-  'gemini-2.5-flash-preview-tts',
-]
+const TTS_MODEL = 'gemini-3.1-flash-tts-preview'
 
 // ─── RARITY CONFIG ───────────────────────────────────────────────────────────
 const RARITIES = {
@@ -408,24 +405,20 @@ function buildTtsPayload(text, npcData) {
 
 // ─── TTS API WITH FALLBACK CHAIN ──────────────────────────────────────────────
 async function callTtsApi(body) {
-  for (const model of TTS_MODELS) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-      )
-      const data = await response.json()
-      if (data.error?.code === 429 || data.error?.status === 'RESOURCE_EXHAUSTED') { console.log(`TTS ${model} quota exhausted`); continue }
-      if (data.error) throw new Error(data.error.message)
-      const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
-      if (!audioPart) throw new Error('No audio in response')
-      return audioPart.inlineData.data
-    } catch (e) {
-      if (e.message?.includes('quota') || e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED')) { continue }
-      throw e
-    }
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    )
+    const data = await response.json()
+    if (data.error) { console.log('TTS error:', data.error.message); return null }
+    const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
+    if (!audioPart) { console.log('TTS: no audio in response'); return null }
+    return audioPart.inlineData.data
+  } catch (e) {
+    console.log('TTS failed:', e)
+    return null
   }
-  return null
 }
 
 async function generateChunkTTS(chunkText, npcData) {

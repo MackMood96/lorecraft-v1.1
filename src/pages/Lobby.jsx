@@ -6,7 +6,6 @@ export default function Lobby() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const campaignId = searchParams.get('campaignId')
-  const roomParam = searchParams.get('room')
   const isGuest = searchParams.get('guest') === 'true'
   const isHost = !isGuest
 
@@ -16,12 +15,26 @@ export default function Lobby() {
   const [loading, setLoading] = useState(true)
   const channelRef = useRef(null)
   const statusChannelRef = useRef(null)
+  const roomCodeRef = useRef('')
 
- useEffect(() => {
+  useEffect(() => {
     if (!campaignId) { navigate('/'); return }
     init()
-    // Poll every 3 seconds as reliable fallback for realtime
-    const poll = setInterval(() => loadPlayers(campaignId), 3000)
+    // Poll players AND campaign status every 2 seconds — guaranteed fallback
+    const poll = setInterval(async () => {
+      loadPlayers(campaignId)
+      // Guest checks if host has started
+      if (isGuest) {
+        const { data: campData } = await supabase
+        .from('campaigns')
+        .select('status, room_code')
+        .eq('id', campaignId)
+        .single()
+      if (campData?.status === 'active' && isGuest) {
+        navigate(`/game/${campaignId}?room=${campData.room_code}&host=false`)
+      }
+      }
+    }, 2000)
     return () => {
       clearInterval(poll)
       if (channelRef.current) supabase.removeChannel(channelRef.current)
@@ -37,10 +50,11 @@ export default function Lobby() {
       .single()
     if (!data) { navigate('/'); return }
     setRoomCode(data.room_code)
+    roomCodeRef.current = data.room_code
     setLoading(false)
-    // Load players immediately then subscribe for realtime updates
     await loadPlayers(campaignId)
     subscribeToPlayers(campaignId)
+    // Always watch campaign status for guests via realtime too
     if (isGuest) watchCampaignStatus(campaignId)
   }
 
@@ -53,6 +67,7 @@ export default function Lobby() {
     channel.subscribe()
     channelRef.current = channel
   }
+
   function watchCampaignStatus(id) {
     const channel = supabase.channel(`campaign_status:${id}`)
     channel.on('postgres_changes', {
@@ -80,7 +95,7 @@ export default function Lobby() {
     if (!campaignId || players.length === 0) return
     setStarting(true)
     await supabase.from('campaigns').update({ status: 'active' }).eq('id', campaignId)
-    navigate(`/game/${campaignId}?room=${roomCode}&host=true`)
+    navigate(`/game/${campaignId}?room=${roomCodeRef.current}&host=true`)
   }
 
   if (loading) {
@@ -96,13 +111,11 @@ export default function Lobby() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflowY: 'auto' }}>
 
-      {/* Header */}
       <div style={{ padding: '20px 20px 0' }}>
         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '18px', color: 'var(--gold-light)', letterSpacing: '2px' }}>⚔ LORECRAFT</div>
         <div style={{ height: '1px', background: 'linear-gradient(90deg, var(--gold), transparent)', marginTop: '10px', opacity: 0.4 }} />
       </div>
 
-      {/* Room code */}
       <div style={{ padding: '24px 20px 0', textAlign: 'center' }}>
         <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '4px', color: 'var(--text-dim)', marginBottom: '8px' }}>
           {isHost ? 'SHARE THIS CODE WITH YOUR PARTY' : 'WAITING FOR HOST TO BEGIN'}
@@ -111,15 +124,13 @@ export default function Lobby() {
           {roomCode}
         </div>
         {isHost && (
-          <button
-            onClick={() => navigator.clipboard.writeText(roomCode)}
+          <button onClick={() => navigator.clipboard.writeText(roomCode)}
             style={{ marginTop: '8px', background: 'none', border: '1px solid rgba(201,168,76,0.3)', borderRadius: '4px', color: 'var(--text-dim)', padding: '4px 14px', fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '2px', cursor: 'pointer' }}>
             COPY CODE
           </button>
         )}
       </div>
 
-      {/* Players list */}
       <div style={{ padding: '24px 20px 0', flex: 1 }}>
         <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
           PARTY — {players.length} {players.length === 1 ? 'HERO' : 'HEROES'}
@@ -127,13 +138,9 @@ export default function Lobby() {
 
         {players.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 0' }}>
-            <div style={{ fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '3px', color: '#3a3050', marginBottom: '8px' }}>
-              WAITING FOR ADVENTURERS...
-            </div>
+            <div style={{ fontSize: '8px', fontFamily: "'Cinzel', serif", letterSpacing: '3px', color: '#3a3050', marginBottom: '8px' }}>WAITING FOR ADVENTURERS...</div>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
-              {[0,1,2].map(i => (
-                <div key={i} style={{ width: '5px', height: '5px', background: 'var(--gold)', borderRadius: '50%', opacity: 0.3, animation: 'bounce 1.2s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />
-              ))}
+              {[0,1,2].map(i => <div key={i} style={{ width: '5px', height: '5px', background: 'var(--gold)', borderRadius: '50%', opacity: 0.3, animation: 'bounce 1.2s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />)}
             </div>
           </div>
         ) : (
@@ -156,56 +163,37 @@ export default function Lobby() {
         )}
       </div>
 
-      {/* Host buttons */}
       {isHost && (
         <div style={{ padding: '16px 20px 32px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <button
-            onClick={beginAdventure}
-            disabled={starting || players.length === 0}
+          <button onClick={beginAdventure} disabled={starting || players.length === 0}
             style={{
               padding: '16px', fontFamily: "'Cinzel', serif", fontSize: '13px', letterSpacing: '3px',
               cursor: starting || players.length === 0 ? 'not-allowed' : 'pointer',
               background: players.length > 0 ? 'linear-gradient(135deg, #1e1830, #2a2045)' : 'var(--bg2)',
               border: `2px solid ${players.length > 0 ? 'var(--gold)' : 'var(--border)'}`,
-              borderRadius: '4px',
-              color: players.length > 0 ? 'var(--gold-light)' : 'var(--text-dim)',
+              borderRadius: '4px', color: players.length > 0 ? 'var(--gold-light)' : 'var(--text-dim)',
               boxShadow: players.length > 0 ? '0 0 30px rgba(201,168,76,0.3)' : 'none',
               opacity: starting ? 0.7 : 1, transition: 'all 0.3s'
             }}>
-            {starting
-              ? '⚔ BEGINNING...'
-              : players.length === 0
-              ? 'WAITING FOR PLAYERS...'
-              : `⚔ BEGIN ADVENTURE (${players.length} ${players.length === 1 ? 'HERO' : 'HEROES'})`
-            }
+            {starting ? '⚔ BEGINNING...' : players.length === 0 ? 'WAITING FOR PLAYERS...' : `⚔ BEGIN ADVENTURE (${players.length} ${players.length === 1 ? 'HERO' : 'HEROES'})`}
           </button>
-
-          <button
-            onClick={() => navigate(`/create?campaignId=${campaignId}&host=true`)}
+          <button onClick={() => navigate(`/create?campaignId=${campaignId}&host=true`)}
             style={{ padding: '12px', background: 'transparent', border: '1px solid rgba(201,168,76,0.3)', borderRadius: '4px', color: 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '11px', letterSpacing: '2px', cursor: 'pointer' }}>
             + CREATE YOUR CHARACTER
           </button>
-
           <button onClick={() => navigate('/')} style={{ padding: '8px', background: 'transparent', border: 'none', color: 'var(--text-dim)', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>
             ← BACK TO MENU
           </button>
         </div>
       )}
 
-      {/* Guest waiting */}
       {!isHost && (
         <div style={{ padding: '16px 20px 32px', textAlign: 'center' }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>
-            YOUR CHARACTER IS READY
-          </div>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px', color: 'var(--text-dim)', marginBottom: '12px' }}>YOUR CHARACTER IS READY</div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginBottom: '16px' }}>
-            {[0,1,2].map(i => (
-              <div key={i} style={{ width: '5px', height: '5px', background: 'var(--gold)', borderRadius: '50%', opacity: 0.5, animation: 'bounce 1.2s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />
-            ))}
+            {[0,1,2].map(i => <div key={i} style={{ width: '5px', height: '5px', background: 'var(--gold)', borderRadius: '50%', opacity: 0.5, animation: 'bounce 1.2s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />)}
           </div>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '2px', color: '#3a3050' }}>
-            WAITING FOR HOST TO BEGIN THE ADVENTURE...
-          </div>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', letterSpacing: '2px', color: '#3a3050' }}>WAITING FOR HOST TO BEGIN THE ADVENTURE...</div>
         </div>
       )}
 
