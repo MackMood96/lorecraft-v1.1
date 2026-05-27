@@ -7,6 +7,10 @@ import DiceRoll from '../components/DiceRoll'
 // ─── VOICE CONFIG ────────────────────────────────────────────────────────────
 const NARRATOR_VOICE = 'Charon'
 const NARRATOR_LABEL = 'Narrator'
+const TTS_MODELS = [
+  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-flash-preview-tts',
+]
 
 // ─── RARITY CONFIG ───────────────────────────────────────────────────────────
 const RARITIES = {
@@ -45,23 +49,27 @@ async function callGroq(system, user, maxTokens = 300) {
 
 async function generateScenePrompt(dmText) {
   const prompt = await callGroq(
-    `You generate image prompts for a 2D pixel art dark fantasy RPG game.
+    `You generate image prompts for a 2D pixel art fantasy RPG game.
 Given a dungeon master narrative, return ONLY a short image prompt.
-Always include: "2D pixel art, 16-bit SNES RPG style, dark fantasy, no characters, no text, dramatic lighting"
+Style: "2D pixel art, 16-bit SNES RPG style, no characters, no text, dramatic lighting"
+Time of day and lighting must match the scene context — taverns are warm and lit, forests are green and bright, dungeons have torch light, outdoors can be daytime.
 Describe only the environment/location. Be specific and vivid. Max 30 words total.`,
     dmText, 80
   )
-  return prompt || '2D pixel art, 16-bit SNES RPG style, dark fantasy dungeon, no characters, dramatic lighting'
+  return prompt || '2D pixel art, 16-bit SNES RPG style, fantasy village square, daytime, warm lighting, no characters'
 }
 
-async function generateNpcPortraitPrompt(npc) {
+async function generateSceneWithNpcPrompt(npc, dmText) {
   const prompt = await callGroq(
-    `You generate character portrait prompts for a 2D pixel art dark fantasy RPG game.
-Return ONLY a short image prompt. Max 30 words.
-Always include: "2D pixel art, 16-bit RPG character portrait, dark fantasy, face and upper body"`,
-    `NPC: ${npc.name}, ${npc.race} ${npc.role}. ${npc.description || ''}`, 80
+    `You generate image prompts for a 2D pixel art fantasy RPG game in classic JRPG style.
+Return ONLY a short image prompt. Max 40 words.
+The image must show: the NPC character in the foreground left or right side, with the scene/environment as background.
+Style: "2D pixel art, 16-bit SNES JRPG style, character portrait in foreground, detailed background scene, warm dramatic lighting"
+Time of day must match scene context — not always night or dark.`,
+    `NPC in foreground: ${npc.name}, ${npc.race} ${npc.role}. ${npc.description || ''}
+Background scene context: ${dmText.slice(0, 200)}`, 100
   )
-  return prompt || `2D pixel art, 16-bit RPG character portrait, ${npc.race} ${npc.role}, dark fantasy, face and upper body`
+  return prompt || `2D pixel art, 16-bit SNES JRPG style, ${npc.race} ${npc.role} character portrait foreground, fantasy scene background, warm lighting`
 }
 
 async function generateVaultRoll(playerClass, playerRace, rarity, type) {
@@ -104,27 +112,33 @@ function base64ToBlob(base64, mimeType) {
 }
 
 // ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Your role is to create an immersive, dynamic, and engaging adventure.
+const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Create immersive, dynamic adventures.
 
-CORE RULES:
-- Narrate vividly but concisely. Match response length to the situation.
-- Simple actions (talking, looking around) = 1-2 sentences only.
-- Complex actions (entering new area, combat, major story moments) = up to 3 paragraphs.
-- NEVER pad responses.
-- Address players by name when multiple are present.
-- NEVER speak or act on behalf of ANY player character.
-- @MENTION RULE: If a message contains @PlayerName, respond with ONLY one narrative sentence. Then STOP.
-- React to EVERYTHING the player does.
-- End with suggested actions in *italics* ONLY for complex responses.
+RESPONSE LENGTH — CRITICAL. Match length strictly to situation:
+- Player speaks directly to an NPC → NPC replies ONLY. No narration before or after unless something physical happens. 1-3 lines of dialogue maximum.
+- Simple actions (look around, pick up item, open door) → 1 sentence only.
+- Movement to new area → 2-3 sentences describing the destination. Stop.
+- Combat round → dice roll + 1 sentence outcome. Stop.
+- Major story moment (new area first visit, plot revelation, quest complete) → 2 short paragraphs maximum. Then stop.
+- NEVER pad. If you can say it in one sentence, use one sentence.
+- NEVER add suggested actions unless the player faces a major decision or combat.
+- If suggested actions are needed, use *italics* and maximum 3 options on one line.
 
-CLASS RESTRICTIONS — CRITICAL. Enforce strictly, never bend these rules:
-- Warrior: swords, axes, maces, spears, shields, bows. Light/medium/heavy armor. CANNOT cast spells, use wands or staves.
-- Rogue: daggers, shortbows, shortswords. Light armor only. CANNOT use heavy weapons, heavy armor. No magic.
-- Mage: staves, wands, orbs. Robes only. CANNOT wear heavy armor, use swords or physical weapons.
-- Ranger: bows, daggers, shortswords. Light/medium armor. CANNOT use heavy armor. Nature magic only.
-If a player attempts a class-restricted action, refuse narratively and suggest a class-appropriate alternative.
+NPC CONVERSATION RULE — CRITICAL:
+- When a player talks to an NPC, the NPC speaks. That is the entire response.
+- Do NOT write "The innkeeper strokes his beard and says:" — just write the dialogue.
+- Do NOT narrate the NPC's physical actions unless dramatically important.
+- Format ALWAYS: NpcName: "dialogue here"
+- One NPC speaks per response. Never two NPCs in the same response.
 
-ATTRIBUTE SYSTEM — Use to determine outcomes. Always roll dice for uncertain actions:
+CLASS RESTRICTIONS — enforce strictly:
+- Warrior: swords, axes, maces, spears, shields, bows. Light/medium/heavy armor. No spells.
+- Rogue: daggers, shortbows, shortswords. Light armor only. No magic.
+- Mage: staves, wands, orbs. Robes only. No heavy armor or physical weapons.
+- Ranger: bows, daggers, shortswords. Light/medium armor. Nature magic only.
+Refuse class-restricted actions narratively and suggest a class-appropriate alternative.
+
+ATTRIBUTES — use to determine outcomes:
 - STR: Melee attacks, breaking things, intimidation
 - DEX: Stealth, ranged attacks, dodging, lockpicking
 - INT: Spells, knowledge, puzzles, arcane detection
@@ -132,59 +146,43 @@ ATTRIBUTE SYSTEM — Use to determine outcomes. Always roll dice for uncertain a
 - CHA: Persuasion, deception, NPC reactions, trading
 - LCK: Critical hits, finding items, random events
 
-DICE ROLLING — CRITICAL:
-- Roll dice for ALL uncertain outcomes. Format: "Rolling d20... [X]!"
-- High attribute = better odds. Low attribute = worse odds.
-- Critical success (18-20): exceptional outcome
-- Success (11-17): action succeeds
-- Partial (6-10): succeeds with complication
-- Failure (1-5): action fails, possible consequence
+DICE ROLLING:
+- Roll for ALL uncertain outcomes. Format: "Rolling d20... [X]!"
+- 18-20: critical success | 11-17: success | 6-10: partial | 1-5: failure
 
-PROBABILITY SYSTEM — CRITICAL. Player requests must be evaluated by realism and difficulty:
-- Mundane tasks (find water, pick a lock with tools) = high base chance, roll d20 + DEX/INT modifier
-- Combat actions = roll d20 + STR/DEX modifier vs enemy difficulty
-- Persuasion = roll d20 + CHA modifier vs NPC disposition
-- Extraordinary feats (jump a 20ft gap) = low base chance, high roll needed
-- Impossible requests (become a god, instant teleport) = REFUSE narratively. These cannot happen regardless of roll.
-- Players CANNOT simply declare outcomes. "I find 50 gold on the ground" is NOT valid. Always roll to determine.
-- Searching for valuables: roll d20 + LCK. 15+ finds something minor, 18+ finds something good, 20 = rare find.
+PROBABILITY:
+- Mundane tasks = high base chance
+- Extraordinary feats = low base chance, high roll needed
+- Impossible requests = refuse narratively regardless of roll
+- Players CANNOT declare outcomes. Always roll to determine.
+- Searching: roll d20 + LCK. 15+ minor find, 18+ good find, 20 = rare find.
 
-INVENTORY RULES — CRITICAL. These are the ONLY valid ways items enter a player's inventory:
-1. Quest completion — DM confirms quest done, reward is explicit
-2. Container opened — chest, bag, body looted AFTER a successful search roll
-3. Enemy defeated — loot roll required after combat victory
-4. Merchant purchase — player must have sufficient gold, DM confirms transaction
-5. Item found — ONLY after a successful search/investigation roll
-6. Another player gives it — player-to-player transfers handled by the game, NOT the DM
+INVENTORY — only valid triggers:
+1. Quest completion with explicit reward
+2. Container looted AFTER successful search roll
+3. Enemy defeated — loot roll required
+4. Merchant purchase with sufficient gold confirmed
+5. Item found AFTER successful search roll
+6. Player-to-player transfer (handled by game, not DM)
 
-FORBIDDEN inventory triggers (DM must REFUSE these):
-- Player simply declares they find/have/pick up something without a roll
-- Player asks for gold without earning it
-- Player invents items they "had all along"
-- Any item appearing without a valid trigger above
+Refuse: declaring items found without roll, inventing items, asking for free gold.
 
-When a valid inventory event occurs, include at END of response:
+Valid inventory event — append to END of response:
 <inventory_add>{"player":"Name","item":"item name","icon":"emoji","reason":"quest_reward|loot|purchase|found"}</inventory_add>
-
-When an item is validly consumed, sold, or lost:
 <inventory_remove>{"player":"Name","item":"item name"}</inventory_remove>
-
-When gold changes due to valid transaction:
 <state_update>{"hp": NEW_HP, "gold": NEW_GOLD}</state_update>
-
-Quest rewards as Vault rolls:
 <grant_roll>{"player":"Name"}</grant_roll>
 
-DIALOGUE FORMATTING — CRITICAL:
-- NPC dialogue MUST be on its own separate paragraph.
-- NEVER mix narration and NPC dialogue in same paragraph.
-- NPC speech format: NpcName: "words here"
-- NEVER use asterisks around data tags. Use ONLY XML angle bracket format.
-
-NPC DATA — first appearance only:
-<npc_data>{"name":"NpcName","gender":"male|female","voice":"VoiceName","race":"Race","role":"Role","description":"appearance and personality"}</npc_data>
+NPC DATA — include ONCE on first appearance, at END of response:
+<npc_data>{"name":"NpcName","gender":"male|female","voice":"VoiceName","race":"Race","role":"Role","description":"brief appearance and personality"}</npc_data>
 Male voices: Fenrir (warrior/villain), Orus (merchant/elder), Achird (mysterious/mage)
 Female voices: Kore (mysterious/mage), Aoede (noble/elf), Leda (warrior/ranger)
+
+DIALOGUE FORMAT — ABSOLUTE RULE:
+- NPC line format: NpcName: "words here"
+- NPC dialogue is ALWAYS its own paragraph, never mixed with narration
+- NEVER use asterisks around tags. XML angle brackets ONLY.
+- NEVER invent a voice name. Use ONLY the six voices listed above.
 
 KNOWN NPCS:
 {{NPC_ROSTER}}`
@@ -279,59 +277,64 @@ function buildNpcRoster(npcData) {
   return npcs.map(n => `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`).join('\n')
 }
 
-// ─── MULTI-SPEAKER TTS ───────────────────────────────────────────────────────
-// Analyses the DM text and builds ONE TTS request covering the whole response.
-// Three cases:
-//   1. Pure narration only       → single speaker Charon
-//   2. Pure NPC dialogue only    → single speaker NPC voice
-//   3. Mixed narration + NPC     → multi-speaker (max 2: Narrator + 1 NPC)
-//
-// Lines that are meta/suggested-actions (*italics*) are stripped before sending.
-
-function buildTtsPayload(text, npcData) {
-  // Strip suggested actions (*...*) and blank lines
-  const lines = text
-    .split(/\n+/)
-    .map(l => l.trim())
-    .filter(l => l.length > 0 && !l.startsWith('*') && !l.endsWith('*'))
-
-  if (lines.length === 0) return null
-
-  // Detect which NPC speaks (only support 1 NPC per response per multi-speaker limit)
-  let npcName = null
-  let npcVoice = null
-
+// ─── NPC DETECTION ────────────────────────────────────────────────────────────
+// Robust detection — handles "NpcName:" and "NpcName: " at start of any line
+// Also handles quoted variations like NpcName: "text" or NpcName: text
+function detectNpcInText(text, npcData) {
+  if (!npcData || Object.keys(npcData).length === 0) return null
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean)
   for (const line of lines) {
     for (const [name, data] of Object.entries(npcData)) {
-      if (line.startsWith(`${name}:`)) {
+      // Match "NpcName:" or "NpcName: " at start of line (case insensitive)
+      if (new RegExp(`^${name}\\s*:`, 'i').test(line)) {
         const voice = typeof data === 'string' ? data : data.voice
         if (voice && typeof voice === 'string') {
-          npcName = name
-          npcVoice = voice
-          break
+          return { npcName: name, npcVoice: voice }
         }
       }
     }
-    if (npcName) break
   }
+  return null
+}
 
-  const hasNarration = lines.some(l => !npcName || !l.startsWith(`${npcName}:`))
+// ─── MULTI-SPEAKER TTS ────────────────────────────────────────────────────────
+function buildTtsPayload(text, npcData) {
+  // Strip suggested actions (*...*), tags, and blank lines
+  const lines = text
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => {
+      if (!l) return false
+      if (l.startsWith('<') && l.includes('>')) return false // XML tags
+      if (l.startsWith('*') && l.endsWith('*')) return false // suggested actions
+      return true
+    })
+
+  if (lines.length === 0) return null
+
+  // Detect NPC using robust detection
+  const npcMatch = detectNpcInText(lines.join('\n'), npcData)
+  const npcName = npcMatch?.npcName || null
+  const npcVoice = npcMatch?.npcVoice || null
+
   const hasNpc = npcName !== null
+  const hasNarration = hasNpc
+    ? lines.some(l => !new RegExp(`^${npcName}\\s*:`, 'i').test(l))
+    : true
 
   // ── Case 1: Pure narration ──
   if (!hasNpc) {
     return {
       type: 'single',
       voice: NARRATOR_VOICE,
-      text: `Speak like David Attenborough narrating a dark fantasy world — measured, authoritative, with quiet gravitas. British accent.\n\n${lines.join('\n')}`,
+      text: lines.join('\n'),
     }
   }
 
   // ── Case 2: Pure NPC dialogue ──
   if (hasNpc && !hasNarration) {
     const npcLines = lines
-      .filter(l => l.startsWith(`${npcName}:`))
-      .map(l => l.replace(`${npcName}:`, '').trim())
+      .map(l => l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim())
       .join(' ')
     return {
       type: 'single',
@@ -341,10 +344,10 @@ function buildTtsPayload(text, npcData) {
   }
 
   // ── Case 3: Mixed — multi-speaker ──
-  // Label each line with Narrator or NpcName
   const labeled = lines.map(l => {
-    if (l.startsWith(`${npcName}:`)) {
-      return `${npcName}: ${l.replace(`${npcName}:`, '').trim()}`
+    if (new RegExp(`^${npcName}\\s*:`, 'i').test(l)) {
+      const dialogue = l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim()
+      return `${npcName}: ${dialogue}`
     }
     return `${NARRATOR_LABEL}: ${l}`
   }).join('\n')
@@ -355,6 +358,35 @@ function buildTtsPayload(text, npcData) {
     npcVoice,
     text: labeled,
   }
+}
+
+// ─── TTS WITH FALLBACK CHAIN ──────────────────────────────────────────────────
+async function callTtsApi(body) {
+  for (const model of TTS_MODELS) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      )
+      const data = await response.json()
+      if (data.error?.code === 429 || data.error?.status === 'RESOURCE_EXHAUSTED') {
+        console.log(`TTS model ${model} quota exhausted, trying next...`)
+        continue
+      }
+      if (data.error) throw new Error(data.error.message)
+      const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
+      if (!audioPart) throw new Error('No audio in response')
+      return audioPart.inlineData.data
+    } catch (e) {
+      if (e.message?.includes('quota') || e.message?.includes('429')) {
+        console.log(`TTS model ${model} failed with quota error, trying next...`)
+        continue
+      }
+      throw e
+    }
+  }
+  // All Gemini models exhausted — browser fallback
+  return null
 }
 
 async function generateMultiSpeakerTTS(text, npcData) {
@@ -376,7 +408,6 @@ async function generateMultiSpeakerTTS(text, npcData) {
       }
     }
   } else {
-    // Multi-speaker
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
       generationConfig: {
@@ -399,18 +430,21 @@ async function generateMultiSpeakerTTS(text, npcData) {
     }
   }
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-  )
+  return await callTtsApi(body)
+}
 
-  const data = await response.json()
-  if (data.error) throw new Error(data.error.message)
-
-  const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
-  if (!audioPart) throw new Error('No audio in response')
-
-  return audioPart.inlineData.data
+// ─── BROWSER TTS FALLBACK ─────────────────────────────────────────────────────
+function browserTtsFallback(text) {
+  return new Promise((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return }
+    const clean = text.replace(/\*.*?\*/g, '').replace(/\w+:\s*/g, '').trim()
+    const utt = new SpeechSynthesisUtterance(clean)
+    utt.rate = 0.9
+    utt.pitch = 0.8
+    utt.onend = resolve
+    utt.onerror = resolve
+    window.speechSynthesis.speak(utt)
+  })
 }
 
 function playBase64Audio(base64Pcm, audioRef) {
@@ -491,28 +525,19 @@ export default function Game() {
   }, [messages])
 
   // ─── SCENE ────────────────────────────────────────────────────────────────
-  const hostGenerateAndBroadcastScene = useCallback(async (dmText) => {
+  const hostGenerateAndBroadcastScene = useCallback(async (dmText, activeNpc = null) => {
     try {
       lastDmTextRef.current = dmText
-      const scenePrompt = await generateScenePrompt(dmText)
+      // If NPC is present use JRPG style with NPC in foreground
+      const scenePrompt = activeNpc
+        ? await generateSceneWithNpcPrompt(activeNpc, dmText)
+        : await generateScenePrompt(dmText)
       const imageUrl = await generateGeminiImage(scenePrompt)
       sceneChannelRef.current?.send({ type: 'broadcast', event: 'scene_update', payload: { url: imageUrl, label: scenePrompt.slice(0, 50) } })
       setSceneLoading(true)
-      setSceneLabel(scenePrompt.slice(0, 50))
+      setSceneLabel(activeNpc ? activeNpc.name : scenePrompt.slice(0, 50))
       setSceneUrl(imageUrl)
     } catch (e) { console.log('Scene error:', e) }
-  }, [])
-
-  const hostGenerateNpcPortrait = useCallback(async (npc) => {
-    try {
-      const portraitPrompt = await generateNpcPortraitPrompt(npc)
-      const portraitUrl = await generateGeminiImage(portraitPrompt)
-      sceneChannelRef.current?.send({ type: 'broadcast', event: 'npc_portrait', payload: { url: portraitUrl, label: npc.name } })
-      setSceneLoading(true)
-      setSceneLabel(npc.name)
-      setSceneUrl(portraitUrl)
-      return { portraitUrl }
-    } catch (e) { console.log('NPC portrait error:', e); return {} }
   }, [])
 
   const regenerateScene = () => {
@@ -524,7 +549,6 @@ export default function Game() {
     const sceneChannel = supabase.channel(`scene:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
       sceneChannel.on('broadcast', { event: 'scene_update' }, ({ payload }) => { setSceneLoading(true); setSceneLabel(payload.label || 'Scene'); setSceneUrl(payload.url) })
-      sceneChannel.on('broadcast', { event: 'npc_portrait' }, ({ payload }) => { setSceneLoading(true); setSceneLabel(payload.label); setSceneUrl(payload.url) })
     }
     sceneChannel.subscribe()
     sceneChannelRef.current = sceneChannel
@@ -553,7 +577,7 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
-  // ─── HOST TTS — SINGLE REQUEST ────────────────────────────────────────────
+  // ─── HOST TTS ─────────────────────────────────────────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
     const clean = cleanText(text)
@@ -564,20 +588,26 @@ export default function Game() {
 
     try {
       const base64Pcm = await generateMultiSpeakerTTS(clean, npcDataRef.current)
-      if (!base64Pcm) { setTtsStatus('idle'); return }
 
       if (mutedRef.current) { setTtsStatus('idle'); return }
 
-      // Broadcast to guests
-      audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
+      if (!base64Pcm) {
+        // Browser fallback
+        setTtsStatus('playing')
+        await browserTtsFallback(clean)
+        setTtsStatus('idle')
+        audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
+        return
+      }
 
-      // Play locally for host
+      audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
       const audio = playBase64Audio(base64Pcm, currentAudioRef)
       setTtsStatus('playing')
       await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
     } catch (e) {
       console.log('TTS failed:', e)
-      setTtsStatus('idle')
+      // Try browser fallback on any error
+      try { setTtsStatus('playing'); await browserTtsFallback(clean) } catch {}
     }
 
     setTtsStatus('idle')
@@ -604,7 +634,7 @@ export default function Game() {
     loadPlayers()
     loadPlayerAvatars()
     checkDmBusy()
-    if (isHost) hostGenerateAndBroadcastScene('A fantasy adventure begins, misty landscape, ancient world')
+    if (isHost) hostGenerateAndBroadcastScene('A fantasy adventure begins, misty landscape, ancient world, daytime')
     const poll = setInterval(() => { loadMessages(); checkDmBusy() }, 3000)
     return () => { cleanupChannels(); clearInterval(poll); if (musicRef.current) { musicRef.current.pause(); musicRef.current = null } }
   }, [campaignId])
@@ -648,7 +678,10 @@ export default function Game() {
         if (lastMsg.role === 'dm' && prev.length < newMessages.length && isHost) {
           hostGenerateAndBroadcastAudio(lastMsg.text)
           playMusic(detectMood(lastMsg.text))
-          hostGenerateAndBroadcastScene(lastMsg.text)
+          // Detect active NPC for scene generation
+          const activeNpc = detectNpcInText(lastMsg.text, npcDataRef.current)
+          const npcObj = activeNpc ? npcDataRef.current[activeNpc.npcName] : null
+          hostGenerateAndBroadcastScene(lastMsg.text, npcObj)
         }
         return newMessages
       })
@@ -674,7 +707,9 @@ export default function Game() {
       if (msg.role === 'dm' && isHost) {
         hostGenerateAndBroadcastAudio(msg.content)
         playMusic(detectMood(msg.content))
-        hostGenerateAndBroadcastScene(msg.content)
+        const activeNpc = detectNpcInText(msg.content, npcDataRef.current)
+        const npcObj = activeNpc ? npcDataRef.current[activeNpc.npcName] : null
+        hostGenerateAndBroadcastScene(msg.content, npcObj)
         const roll = parseDiceRoll(msg.content)
         if (roll) rollDice(roll.sides, 0, 'Fate decides...')
       }
@@ -742,7 +777,7 @@ export default function Game() {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 1000 })
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
     })
     const data = await response.json()
     if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
@@ -750,12 +785,15 @@ export default function Game() {
   }
 
   async function processDmResponse(raw) {
+    // ── Parse and update NPC data FIRST so npcDataRef is current before TTS ──
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
-      const { portraitUrl } = await hostGenerateNpcPortrait(npc)
-      const updated = { ...npcDataRef.current, [npc.name]: { ...npc, portrait_url: portraitUrl } }
-      setNpcData(updated); npcDataRef.current = updated
+      const updated = { ...npcDataRef.current, [npc.name]: { ...npc } }
+      setNpcData(updated)
+      npcDataRef.current = updated
       await saveNpcData(updated)
+      // Generate scene with new NPC in foreground
+      if (isHost) hostGenerateAndBroadcastScene(raw, npc)
     }
 
     const stateUpdate = parseStateUpdate(raw)
@@ -763,22 +801,16 @@ export default function Game() {
 
     const adds = parseInventoryAdd(raw)
     for (const add of adds) {
-      if (add.player === player?.name) {
-        await addInventoryItem(`${add.icon || '📦'} ${add.item}`)
-      }
+      if (add.player === player?.name) await addInventoryItem(`${add.icon || '📦'} ${add.item}`)
     }
 
     const removes = parseInventoryRemove(raw)
     for (const remove of removes) {
-      if (remove.player === player?.name) {
-        await removeInventoryItem(remove.item)
-      }
+      if (remove.player === player?.name) await removeInventoryItem(remove.item)
     }
 
     const grantRoll = parseGrantRoll(raw)
-    if (grantRoll?.player === player?.name) {
-      setVaultRollsAvailable(v => v + 1)
-    }
+    if (grantRoll?.player === player?.name) setVaultRollsAvailable(v => v + 1)
 
     const clean = cleanText(raw)
     await saveMessage('dm', clean)
@@ -1027,7 +1059,6 @@ export default function Game() {
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px' }}>
 
-              {/* ITEMS */}
               {inventoryTab === 'items' && (
                 <div>
                   {(gameState.inventory || []).length === 0
@@ -1040,7 +1071,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* EQUIPMENT */}
               {inventoryTab === 'equipment' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[['mainHand', '🗡️ Main Hand'], ['offHand', '🛡️ Off Hand'], ['armor', '🧥 Armor'], ['accessory', '💍 Accessory']].map(([slot, label]) => {
@@ -1070,7 +1100,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* ABILITIES */}
               {inventoryTab === 'abilities' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {(player?.abilities || []).length === 0
@@ -1092,7 +1121,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* TRADE */}
               {inventoryTab === 'trade' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '2px', marginBottom: '4px' }}>GIVE ITEMS OR GOLD</div>
@@ -1119,7 +1147,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* VAULT */}
               {inventoryTab === 'vault' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ textAlign: 'center', padding: '8px 0' }}>
