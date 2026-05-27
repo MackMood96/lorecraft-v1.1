@@ -1,16 +1,38 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { supabase } from '../supabase'
 
 export default function Splash() {
   const navigate = useNavigate()
-  const [showJoin, setShowJoin] = useState(false)
+  const [screen, setScreen] = useState('home') // home | join
   const [roomCode, setRoomCode] = useState('')
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  function handleJoin() {
+  async function handleCreateCampaign() {
+    setLoading(true)
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const { data, error } = await supabase
+      .from('campaigns')
+      .insert({ room_code: code, name: `Campaign ${code}`, status: 'lobby' })
+      .select().single()
+    if (error || !data) { setLoading(false); setError('Failed to create campaign.'); return }
+    navigate(`/create?campaignId=${data.id}&host=true`)
+  }
+
+  async function handleJoin() {
     const code = roomCode.trim().toUpperCase()
     if (code.length < 6) { setError('Enter a valid 6-character room code.'); return }
-    navigate(`/lobby?room=${code}`)
+    setLoading(true)
+    setError('')
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select()
+      .eq('room_code', code)
+      .single()
+    if (error || !data) { setLoading(false); setError('Room not found. Check your code.'); return }
+    if (data.status === 'active') { setLoading(false); setError('This game has already started.'); return }
+    navigate(`/create?room=${code}&campaignId=${data.id}`)
   }
 
   return (
@@ -69,26 +91,41 @@ export default function Splash() {
         color: '#8a7040', marginTop: '6px'
       }}>AI DUNGEON MASTER</div>
 
-      {/* Buttons or Join Form */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '48px', width: '260px' }}>
-        {!showJoin ? (
-          <>
-            <button onClick={() => navigate('/lobby')} style={{
-              padding: '14px', background: 'linear-gradient(135deg, #1e1830, #2a2045)',
-              border: '1px solid #c9a84c', borderRadius: '4px', color: '#f5e6c8',
-              fontSize: '13px', letterSpacing: '3px', cursor: 'pointer',
-              boxShadow: '0 0 20px rgba(201,168,76,0.15)',
-              fontFamily: "'Cinzel', serif"
-            }}>⚔️ NEW GAME</button>
 
-            <button onClick={() => navigate('/lobby?join=true')} style={{
-              padding: '14px', background: 'transparent',
-              border: '1px solid rgba(201,168,76,0.3)', borderRadius: '4px',
-              color: '#8a7040', fontSize: '13px', letterSpacing: '3px', cursor: 'pointer',
-              fontFamily: "'Cinzel', serif"
-            }}>🚪 JOIN CAMPAIGN</button>
+        {/* ── HOME SCREEN ── */}
+        {screen === 'home' && (
+          <>
+            <button
+              onClick={handleCreateCampaign}
+              disabled={loading}
+              style={{
+                padding: '14px',
+                background: loading ? 'var(--bg2)' : 'linear-gradient(135deg, #1e1830, #2a2045)',
+                border: '1px solid #c9a84c', borderRadius: '4px', color: '#f5e6c8',
+                fontSize: '13px', letterSpacing: '3px', cursor: loading ? 'not-allowed' : 'pointer',
+                boxShadow: '0 0 20px rgba(201,168,76,0.15)',
+                fontFamily: "'Cinzel', serif"
+              }}>
+              {loading ? '⚔ CREATING...' : '⚔️ CREATE CAMPAIGN'}
+            </button>
+
+            <button
+              onClick={() => { setScreen('join'); setError('') }}
+              disabled={loading}
+              style={{
+                padding: '14px', background: 'transparent',
+                border: '1px solid rgba(201,168,76,0.3)', borderRadius: '4px',
+                color: '#8a7040', fontSize: '13px', letterSpacing: '3px',
+                cursor: 'pointer', fontFamily: "'Cinzel', serif"
+              }}>
+              🚪 JOIN CAMPAIGN
+            </button>
           </>
-        ) : (
+        )}
+
+        {/* ── JOIN SCREEN ── */}
+        {screen === 'join' && (
           <>
             <div style={{
               fontFamily: "'Cinzel', serif", fontSize: '9px', letterSpacing: '3px',
@@ -103,37 +140,49 @@ export default function Splash() {
               maxLength={6}
               autoFocus
               style={{
-                background: 'var(--bg2)', border: '1px solid rgba(201,168,76,0.4)',
+                background: 'rgba(30,24,48,0.8)',
+                border: '1px solid rgba(201,168,76,0.4)',
                 borderRadius: '4px', padding: '14px', color: '#f5e6c8',
                 fontSize: '26px', letterSpacing: '10px', outline: 'none',
-                textAlign: 'center', fontFamily: "'Cinzel', serif", width: '100%',
-                boxSizing: 'border-box'
+                textAlign: 'center', fontFamily: "'Cinzel', serif",
+                width: '100%', boxSizing: 'border-box'
               }}
             />
 
             {error && (
-              <div style={{ color: '#e74c3c', fontSize: '11px', textAlign: 'center', fontStyle: 'italic' }}>
+              <div style={{ color: '#e74c3c', fontSize: '11px', textAlign: 'center', fontStyle: 'italic', fontFamily: "'Cinzel', serif" }}>
                 {error}
               </div>
             )}
 
-            <button onClick={handleJoin} disabled={roomCode.length < 6} style={{
-              padding: '14px',
-              background: roomCode.length >= 6 ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)',
-              border: `1px solid ${roomCode.length >= 6 ? '#c9a84c' : 'var(--border)'}`,
-              borderRadius: '4px',
-              color: roomCode.length >= 6 ? '#f5e6c8' : 'var(--text-dim)',
-              fontSize: '13px', letterSpacing: '3px', cursor: roomCode.length >= 6 ? 'pointer' : 'not-allowed',
-              fontFamily: "'Cinzel', serif"
-            }}>JOIN →</button>
+            <button
+              onClick={handleJoin}
+              disabled={roomCode.length < 6 || loading}
+              style={{
+                padding: '14px',
+                background: roomCode.length >= 6 ? 'linear-gradient(135deg, #2a1f0a, #3d2e10)' : 'var(--bg2)',
+                border: `1px solid ${roomCode.length >= 6 ? '#c9a84c' : 'rgba(201,168,76,0.2)'}`,
+                borderRadius: '4px',
+                color: roomCode.length >= 6 ? '#f5e6c8' : '#4a3a2a',
+                fontSize: '13px', letterSpacing: '3px',
+                cursor: roomCode.length >= 6 && !loading ? 'pointer' : 'not-allowed',
+                fontFamily: "'Cinzel', serif"
+              }}>
+              {loading ? 'SEARCHING...' : 'JOIN →'}
+            </button>
 
-            <button onClick={() => { setShowJoin(false); setRoomCode(''); setError('') }} style={{
-              padding: '10px', background: 'transparent', border: 'none',
-              color: 'var(--text-dim)', fontSize: '11px', letterSpacing: '2px',
-              cursor: 'pointer', fontFamily: "'Cinzel', serif"
-            }}>← BACK</button>
+            <button
+              onClick={() => { setScreen('home'); setRoomCode(''); setError(''); setLoading(false) }}
+              style={{
+                padding: '10px', background: 'transparent', border: 'none',
+                color: 'var(--text-dim)', fontSize: '11px', letterSpacing: '2px',
+                cursor: 'pointer', fontFamily: "'Cinzel', serif"
+              }}>
+              ← BACK
+            </button>
           </>
         )}
+
       </div>
 
       <div style={{
