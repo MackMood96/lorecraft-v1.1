@@ -17,10 +17,13 @@ export default function Lobby() {
   const channelRef = useRef(null)
   const statusChannelRef = useRef(null)
 
-  useEffect(() => {
+ useEffect(() => {
     if (!campaignId) { navigate('/'); return }
     init()
+    // Poll every 3 seconds as reliable fallback for realtime
+    const poll = setInterval(() => loadPlayers(campaignId), 3000)
     return () => {
+      clearInterval(poll)
       if (channelRef.current) supabase.removeChannel(channelRef.current)
       if (statusChannelRef.current) supabase.removeChannel(statusChannelRef.current)
     }
@@ -35,13 +38,14 @@ export default function Lobby() {
     if (!data) { navigate('/'); return }
     setRoomCode(data.room_code)
     setLoading(false)
+    // Load players immediately then subscribe for realtime updates
+    await loadPlayers(campaignId)
     subscribeToPlayers(campaignId)
     if (isGuest) watchCampaignStatus(campaignId)
   }
 
   function subscribeToPlayers(id) {
-    loadPlayers(id)
-    const channel = supabase.channel(`lobby:${id}`)
+    const channel = supabase.channel(`lobby_players:${id}`)
     channel.on('postgres_changes', {
       event: '*', schema: 'public', table: 'players',
       filter: `campaign_id=eq.${id}`
@@ -49,7 +53,6 @@ export default function Lobby() {
     channel.subscribe()
     channelRef.current = channel
   }
-
   function watchCampaignStatus(id) {
     const channel = supabase.channel(`campaign_status:${id}`)
     channel.on('postgres_changes', {

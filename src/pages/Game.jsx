@@ -458,16 +458,6 @@ async function generateChunkTTS(chunkText, npcData) {
   return await callTtsApi(body)
 }
 
-function browserTtsFallback(text) {
-  return new Promise((resolve) => {
-    if (!window.speechSynthesis) { resolve(); return }
-    const clean = text.replace(/\*.*?\*/g, '').replace(/\w+:\s*/g, '').trim()
-    const utt = new SpeechSynthesisUtterance(clean)
-    utt.rate = 0.85; utt.pitch = 0.8
-    utt.onend = resolve; utt.onerror = resolve
-    window.speechSynthesis.speak(utt)
-  })
-}
 
 function playBase64Audio(base64Pcm, audioRef) {
   const blob = pcmToWav(base64Pcm)
@@ -645,7 +635,7 @@ export default function Game() {
       }
     } catch (e) {
       console.log('Chunk 1 TTS failed:', e)
-      try { setTtsStatus('playing'); await browserTtsFallback(chunks[0]) } catch {}
+      setTtsStatus('idle')
     }
 
     // Play chunk 2 once it's ready (should already be done by now)
