@@ -7,6 +7,7 @@ import DiceRoll from '../components/DiceRoll'
 // ─── VOICE CONFIG ────────────────────────────────────────────────────────────
 const NARRATOR_VOICE = 'Charon'
 const NARRATOR_LABEL = 'Narrator'
+const NARRATOR_STYLE = 'Speak as a measured, authoritative fantasy story narrator. Deep and calm with deliberate pacing. Convey gravitas and wonder. Consistent tone throughout.'
 const TTS_MODELS = [
   'gemini-3.1-flash-tts-preview',
   'gemini-2.5-flash-preview-tts',
@@ -51,30 +52,31 @@ async function generateScenePrompt(dmText) {
   const prompt = await callGroq(
     `You generate image prompts for a 2D pixel art fantasy RPG game.
 Given a dungeon master narrative, return ONLY a short image prompt.
-Style: "2D pixel art, 16-bit SNES RPG style, no characters, no text, dramatic lighting"
-Time of day and lighting must match the scene context — taverns are warm and lit, forests are green and bright, dungeons have torch light, outdoors can be daytime.
+Style: "2D pixel art, 16-bit SNES RPG style, no characters, no text"
+Time of day and lighting MUST match the scene — taverns are warm and candlelit, forests are green and sunlit, dungeons have orange torch light, town squares are bright daytime, night scenes have moonlight.
+Vary the aesthetic — sometimes vibrant and colourful, sometimes moody, sometimes warm. Do NOT default to dark or night.
 Describe only the environment/location. Be specific and vivid. Max 30 words total.`,
     dmText, 80
   )
-  return prompt || '2D pixel art, 16-bit SNES RPG style, fantasy village square, daytime, warm lighting, no characters'
+  return prompt || '2D pixel art, 16-bit SNES RPG style, fantasy village square, warm sunny daytime, cobblestone streets, no characters'
 }
 
 async function generateSceneWithNpcPrompt(npc, dmText) {
   const prompt = await callGroq(
-    `You generate image prompts for a 2D pixel art fantasy RPG game in classic JRPG style.
+    `You generate image prompts for a 2D pixel art fantasy RPG game in classic JRPG dialogue style.
 Return ONLY a short image prompt. Max 40 words.
-The image must show: the NPC character in the foreground left or right side, with the scene/environment as background.
-Style: "2D pixel art, 16-bit SNES JRPG style, character portrait in foreground, detailed background scene, warm dramatic lighting"
-Time of day must match scene context — not always night or dark.`,
+The image MUST show: the NPC character portrait on the left or right foreground, environment as background.
+Style: "2D pixel art, 16-bit SNES JRPG style, character portrait in foreground, detailed environment background"
+Time of day MUST match scene context. Vary lighting — warm, bright, moody based on location. Not always dark.`,
     `NPC in foreground: ${npc.name}, ${npc.race} ${npc.role}. ${npc.description || ''}
-Background scene context: ${dmText.slice(0, 200)}`, 100
+Background scene from: ${dmText.slice(0, 200)}`, 100
   )
-  return prompt || `2D pixel art, 16-bit SNES JRPG style, ${npc.race} ${npc.role} character portrait foreground, fantasy scene background, warm lighting`
+  return prompt || `2D pixel art, 16-bit SNES JRPG style, ${npc.race} ${npc.role} portrait foreground, fantasy scene background, warm lighting`
 }
 
 async function generateVaultRoll(playerClass, playerRace, rarity, type) {
   const raw = await callGroq(
-    `You generate unique fantasy RPG ${type}s for a dark fantasy game.
+    `You generate unique fantasy RPG ${type}s for a fantasy game.
 Return ONLY valid JSON with no markdown, no backticks. Format:
 {"name":"string","description":"string","effect":"string","flavor_text":"string","rarity":"${rarity}","type":"${type}"}
 For cursed items: dark humor, negative twist. For legendary: mythic, awe-inspiring. Be creative and unexpected.`,
@@ -183,6 +185,8 @@ DIALOGUE FORMAT — ABSOLUTE RULE:
 - NPC dialogue is ALWAYS its own paragraph, never mixed with narration
 - NEVER use asterisks around tags. XML angle brackets ONLY.
 - NEVER invent a voice name. Use ONLY the six voices listed above.
+- npc_data tag format MUST be exactly: <npc_data>{...}</npc_data>
+- NEVER output *npc_data or *npc_data> or any asterisk variation. Angle brackets ONLY.
 
 KNOWN NPCS:
 {{NPC_ROSTER}}`
@@ -264,10 +268,14 @@ function cleanText(text) {
     .replace(/<inventory_add>[\s\S]*?<\/inventory_add>/g, '')
     .replace(/<inventory_remove>[\s\S]*?<\/inventory_remove>/g, '')
     .replace(/<grant_roll>[\s\S]*?<\/grant_roll>/g, '')
-    .replace(/\*npc_data\([\s\S]*?\)\*/g, '')
-    .replace(/\*state_update\([\s\S]*?\)\*/g, '')
-    .replace(/\*inventory_add\([\s\S]*?\)\*/g, '')
-    .replace(/\*inventory_remove\([\s\S]*?\)\*/g, '')
+    // Malformed asterisk variants
+    .replace(/\*npc_data[>\(][\s\S]*?(<\/npc_data>|\*)/g, '')
+    .replace(/\*state_update[>\(][\s\S]*?(<\/state_update>|\*)/g, '')
+    .replace(/\*inventory_add[>\(][\s\S]*?(<\/inventory_add>|\*)/g, '')
+    .replace(/\*inventory_remove[>\(][\s\S]*?(<\/inventory_remove>|\*)/g, '')
+    .replace(/\*grant_roll[>\(][\s\S]*?(<\/grant_roll>|\*)/g, '')
+    // Nuclear — catch anything remaining with these tag names
+    .replace(/\*?(npc_data|state_update|inventory_add|inventory_remove|grant_roll)[\s\S]{0,500}?(>|\*)/g, '')
     .trim()
 }
 
@@ -278,14 +286,11 @@ function buildNpcRoster(npcData) {
 }
 
 // ─── NPC DETECTION ────────────────────────────────────────────────────────────
-// Robust detection — handles "NpcName:" and "NpcName: " at start of any line
-// Also handles quoted variations like NpcName: "text" or NpcName: text
 function detectNpcInText(text, npcData) {
   if (!npcData || Object.keys(npcData).length === 0) return null
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean)
   for (const line of lines) {
     for (const [name, data] of Object.entries(npcData)) {
-      // Match "NpcName:" or "NpcName: " at start of line (case insensitive)
       if (new RegExp(`^${name}\\s*:`, 'i').test(line)) {
         const voice = typeof data === 'string' ? data : data.voice
         if (voice && typeof voice === 'string') {
@@ -297,53 +302,85 @@ function detectNpcInText(text, npcData) {
   return null
 }
 
-// ─── MULTI-SPEAKER TTS ────────────────────────────────────────────────────────
-function buildTtsPayload(text, npcData) {
-  // Strip suggested actions (*...*), tags, and blank lines
+// ─── SPLIT TEXT INTO TTS CHUNKS ───────────────────────────────────────────────
+// Split into max 3 chunks: narration before NPC, NPC dialogue, narration after.
+// This lets us fire parallel requests and start playing the first chunk fast.
+function splitIntoChunks(text, npcData) {
   const lines = text
     .split(/\n+/)
     .map(l => l.trim())
     .filter(l => {
       if (!l) return false
-      if (l.startsWith('<') && l.includes('>')) return false // XML tags
-      if (l.startsWith('*') && l.endsWith('*')) return false // suggested actions
+      if (l.startsWith('<') && l.includes('>')) return false
+      if (l.startsWith('*') && l.endsWith('*')) return false
+      return true
+    })
+
+  if (lines.length === 0) return []
+  if (lines.length === 1) return [lines[0]]
+
+  const npcMatch = detectNpcInText(lines.join('\n'), npcData)
+  if (!npcMatch) return [lines.join('\n')] // pure narration — single chunk
+
+  const before = []
+  const npcLines = []
+  const after = []
+  let npcSeen = false
+
+  for (const line of lines) {
+    if (new RegExp(`^${npcMatch.npcName}\\s*:`, 'i').test(line)) {
+      npcSeen = true
+      npcLines.push(line)
+    } else if (!npcSeen) {
+      before.push(line)
+    } else {
+      after.push(line)
+    }
+  }
+
+  const chunks = []
+  if (before.length > 0) chunks.push(before.join('\n'))
+  if (npcLines.length > 0) chunks.push(npcLines.join('\n'))
+  if (after.length > 0) chunks.push(after.join('\n'))
+  return chunks.length > 0 ? chunks : [lines.join('\n')]
+}
+
+// ─── MULTI-SPEAKER TTS PAYLOAD ────────────────────────────────────────────────
+function buildTtsPayload(text, npcData) {
+  const lines = text
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(l => {
+      if (!l) return false
+      if (l.startsWith('<') && l.includes('>')) return false
+      if (l.startsWith('*') && l.endsWith('*')) return false
       return true
     })
 
   if (lines.length === 0) return null
 
-  // Detect NPC using robust detection
   const npcMatch = detectNpcInText(lines.join('\n'), npcData)
   const npcName = npcMatch?.npcName || null
   const npcVoice = npcMatch?.npcVoice || null
-
   const hasNpc = npcName !== null
   const hasNarration = hasNpc
     ? lines.some(l => !new RegExp(`^${npcName}\\s*:`, 'i').test(l))
     : true
 
-  // ── Case 1: Pure narration ──
+  // Pure narration
   if (!hasNpc) {
-    return {
-      type: 'single',
-      voice: NARRATOR_VOICE,
-      text: lines.join('\n'),
-    }
+    return { type: 'single', voice: NARRATOR_VOICE, text: lines.join('\n'), isNarrator: true }
   }
 
-  // ── Case 2: Pure NPC dialogue ──
+  // Pure NPC dialogue
   if (hasNpc && !hasNarration) {
     const npcLines = lines
       .map(l => l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim())
       .join(' ')
-    return {
-      type: 'single',
-      voice: npcVoice,
-      text: npcLines,
-    }
+    return { type: 'single', voice: npcVoice, text: npcLines, isNarrator: false }
   }
 
-  // ── Case 3: Mixed — multi-speaker ──
+  // Mixed — multi-speaker
   const labeled = lines.map(l => {
     if (new RegExp(`^${npcName}\\s*:`, 'i').test(l)) {
       const dialogue = l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim()
@@ -352,15 +389,10 @@ function buildTtsPayload(text, npcData) {
     return `${NARRATOR_LABEL}: ${l}`
   }).join('\n')
 
-  return {
-    type: 'multi',
-    npcName,
-    npcVoice,
-    text: labeled,
-  }
+  return { type: 'multi', npcName, npcVoice, text: labeled }
 }
 
-// ─── TTS WITH FALLBACK CHAIN ──────────────────────────────────────────────────
+// ─── TTS API WITH FALLBACK CHAIN ──────────────────────────────────────────────
 async function callTtsApi(body) {
   for (const model of TTS_MODELS) {
     try {
@@ -370,7 +402,7 @@ async function callTtsApi(body) {
       )
       const data = await response.json()
       if (data.error?.code === 429 || data.error?.status === 'RESOURCE_EXHAUSTED') {
-        console.log(`TTS model ${model} quota exhausted, trying next...`)
+        console.log(`TTS ${model} quota exhausted, trying next...`)
         continue
       }
       if (data.error) throw new Error(data.error.message)
@@ -378,19 +410,18 @@ async function callTtsApi(body) {
       if (!audioPart) throw new Error('No audio in response')
       return audioPart.inlineData.data
     } catch (e) {
-      if (e.message?.includes('quota') || e.message?.includes('429')) {
-        console.log(`TTS model ${model} failed with quota error, trying next...`)
+      if (e.message?.includes('quota') || e.message?.includes('429') || e.message?.includes('RESOURCE_EXHAUSTED')) {
+        console.log(`TTS ${model} quota error, trying next...`)
         continue
       }
       throw e
     }
   }
-  // All Gemini models exhausted — browser fallback
-  return null
+  return null // all Gemini models exhausted — caller handles browser fallback
 }
 
-async function generateMultiSpeakerTTS(text, npcData) {
-  const payload = buildTtsPayload(text, npcData)
+async function generateChunkTTS(chunkText, npcData) {
+  const payload = buildTtsPayload(chunkText, npcData)
   if (!payload) return null
 
   let body
@@ -407,7 +438,12 @@ async function generateMultiSpeakerTTS(text, npcData) {
         }
       }
     }
+    // Add systemInstruction for narrator only — keeps voice consistent across messages
+    if (payload.isNarrator) {
+      body.systemInstruction = { parts: [{ text: NARRATOR_STYLE }] }
+    }
   } else {
+    // Multi-speaker — systemInstruction not used, speaker labels handle routing
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
       generationConfig: {
@@ -439,7 +475,7 @@ function browserTtsFallback(text) {
     if (!window.speechSynthesis) { resolve(); return }
     const clean = text.replace(/\*.*?\*/g, '').replace(/\w+:\s*/g, '').trim()
     const utt = new SpeechSynthesisUtterance(clean)
-    utt.rate = 0.9
+    utt.rate = 0.85
     utt.pitch = 0.8
     utt.onend = resolve
     utt.onerror = resolve
@@ -528,7 +564,6 @@ export default function Game() {
   const hostGenerateAndBroadcastScene = useCallback(async (dmText, activeNpc = null) => {
     try {
       lastDmTextRef.current = dmText
-      // If NPC is present use JRPG style with NPC in foreground
       const scenePrompt = activeNpc
         ? await generateSceneWithNpcPrompt(activeNpc, dmText)
         : await generateScenePrompt(dmText)
@@ -548,28 +583,44 @@ export default function Game() {
   function subscribeToSceneAndAudio() {
     const sceneChannel = supabase.channel(`scene:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
-      sceneChannel.on('broadcast', { event: 'scene_update' }, ({ payload }) => { setSceneLoading(true); setSceneLabel(payload.label || 'Scene'); setSceneUrl(payload.url) })
+      sceneChannel.on('broadcast', { event: 'scene_update' }, ({ payload }) => {
+        setSceneLoading(true); setSceneLabel(payload.label || 'Scene'); setSceneUrl(payload.url)
+      })
     }
     sceneChannel.subscribe()
     sceneChannelRef.current = sceneChannel
 
     const audioChannel = supabase.channel(`audio:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
+      // Guest: sequential queue to play chunks in order
+      const audioQueue = []
       let isPlaying = false
-      const playNext = async (base64Pcm) => {
-        if (isPlaying) return
+
+      const playNext = async () => {
+        if (isPlaying || audioQueue.length === 0) return
         isPlaying = true
+        const base64Pcm = audioQueue.shift()
         try {
           const audio = playBase64Audio(base64Pcm, currentAudioRef)
           setTtsStatus('playing')
-          await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
+          await new Promise((resolve) => {
+            audio.addEventListener('ended', resolve)
+            audio.addEventListener('error', resolve)
+            audio.play().catch(resolve)
+          })
         } catch (e) { console.log('Audio error:', e) }
         isPlaying = false
-        setTtsStatus('idle')
+        if (audioQueue.length > 0) playNext()
+        else setTtsStatus('idle')
       }
-      audioChannel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => { if (mutedRef.current) return; playNext(payload.base64Pcm) })
+
+      audioChannel.on('broadcast', { event: 'audio_chunk' }, ({ payload }) => {
+        if (mutedRef.current) return
+        audioQueue.push(payload.base64Pcm)
+        playNext()
+      })
       audioChannel.on('broadcast', { event: 'audio_start' }, () => setTtsStatus('loading'))
-      audioChannel.on('broadcast', { event: 'audio_end' }, () => setTtsStatus('idle'))
+      audioChannel.on('broadcast', { event: 'audio_end' }, () => { if (audioQueue.length === 0) setTtsStatus('idle') })
     }
     audioChannel.subscribe()
     audioChannelRef.current = audioChannel
@@ -577,7 +628,7 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
-  // ─── HOST TTS ─────────────────────────────────────────────────────────────
+  // ─── HOST TTS — PARALLEL CHUNKS, PLAY IN ORDER ───────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
     const clean = cleanText(text)
@@ -586,29 +637,52 @@ export default function Game() {
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_start', payload: {} })
     setTtsStatus('loading')
 
-    try {
-      const base64Pcm = await generateMultiSpeakerTTS(clean, npcDataRef.current)
+    const chunks = splitIntoChunks(clean, npcDataRef.current)
+    if (chunks.length === 0) { setTtsStatus('idle'); return }
 
-      if (mutedRef.current) { setTtsStatus('idle'); return }
+    // Generate all chunks in parallel
+    const generated = new Array(chunks.length).fill(null)
+    const failed = new Array(chunks.length).fill(false)
 
-      if (!base64Pcm) {
-        // Browser fallback
+    const genPromises = chunks.map((chunk, i) =>
+      generateChunkTTS(chunk, npcDataRef.current)
+        .then(base64 => { generated[i] = base64 })
+        .catch(e => { console.log(`Chunk ${i} TTS failed:`, e); failed[i] = true })
+    )
+
+    // Play in order as each chunk becomes available
+    const playInOrder = async () => {
+      for (let i = 0; i < chunks.length; i++) {
+        // Wait for this chunk to finish generating
+        while (generated[i] === null && !failed[i]) {
+          await new Promise(r => setTimeout(r, 80))
+        }
+        if (mutedRef.current) break
+
+        const base64Pcm = generated[i]
+
+        if (!base64Pcm || failed[i]) {
+          // Browser fallback for this chunk
+          setTtsStatus('playing')
+          await browserTtsFallback(chunks[i])
+          continue
+        }
+
+        // Broadcast chunk to guests
+        audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
+
+        // Play locally
+        const audio = playBase64Audio(base64Pcm, currentAudioRef)
         setTtsStatus('playing')
-        await browserTtsFallback(clean)
-        setTtsStatus('idle')
-        audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
-        return
+        await new Promise((resolve) => {
+          audio.addEventListener('ended', resolve)
+          audio.addEventListener('error', resolve)
+          audio.play().catch(resolve)
+        })
       }
-
-      audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm } })
-      const audio = playBase64Audio(base64Pcm, currentAudioRef)
-      setTtsStatus('playing')
-      await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
-    } catch (e) {
-      console.log('TTS failed:', e)
-      // Try browser fallback on any error
-      try { setTtsStatus('playing'); await browserTtsFallback(clean) } catch {}
     }
+
+    await Promise.all([Promise.all(genPromises), playInOrder()])
 
     setTtsStatus('idle')
     audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_end', payload: {} })
@@ -634,7 +708,7 @@ export default function Game() {
     loadPlayers()
     loadPlayerAvatars()
     checkDmBusy()
-    if (isHost) hostGenerateAndBroadcastScene('A fantasy adventure begins, misty landscape, ancient world, daytime')
+    if (isHost) hostGenerateAndBroadcastScene('A fantasy adventure begins, open countryside, ancient ruins, bright daytime')
     const poll = setInterval(() => { loadMessages(); checkDmBusy() }, 3000)
     return () => { cleanupChannels(); clearInterval(poll); if (musicRef.current) { musicRef.current.pause(); musicRef.current = null } }
   }, [campaignId])
@@ -678,7 +752,6 @@ export default function Game() {
         if (lastMsg.role === 'dm' && prev.length < newMessages.length && isHost) {
           hostGenerateAndBroadcastAudio(lastMsg.text)
           playMusic(detectMood(lastMsg.text))
-          // Detect active NPC for scene generation
           const activeNpc = detectNpcInText(lastMsg.text, npcDataRef.current)
           const npcObj = activeNpc ? npcDataRef.current[activeNpc.npcName] : null
           hostGenerateAndBroadcastScene(lastMsg.text, npcObj)
@@ -785,14 +858,13 @@ export default function Game() {
   }
 
   async function processDmResponse(raw) {
-    // ── Parse and update NPC data FIRST so npcDataRef is current before TTS ──
+    // Update NPC data FIRST so npcDataRef is populated before TTS fires
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
       const updated = { ...npcDataRef.current, [npc.name]: { ...npc } }
       setNpcData(updated)
       npcDataRef.current = updated
       await saveNpcData(updated)
-      // Generate scene with new NPC in foreground
       if (isHost) hostGenerateAndBroadcastScene(raw, npc)
     }
 
