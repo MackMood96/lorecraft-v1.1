@@ -111,7 +111,7 @@ For cursed items: dark humor, negative twist. For legendary: mythic, awe-inspiri
 // ─── GEMINI IMAGE ─────────────────────────────────────────────────────────────
 async function generateGeminiImage(prompt) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -634,9 +634,8 @@ export default function Game() {
       const chunk1Audio = await generateChunkTTS(chunks[0], npcDataRef.current)
       if (mutedRef.current) { setTtsStatus('idle'); return }
 
-      if (!chunk1Audio) {
-        setTtsStatus('playing')
-        await browserTtsFallback(chunks[0])
+     if (!chunk1Audio) {
+        setTtsStatus('idle')
       } else {
         audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm: chunk1Audio } })
         const audio = playBase64Audio(chunk1Audio, currentAudioRef)
@@ -659,8 +658,8 @@ export default function Game() {
         const audio = playBase64Audio(chunk2Audio, currentAudioRef)
         setTtsStatus('playing')
         await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
-      } else if (chunk2Failed) {
-        try { await browserTtsFallback(chunks[1]) } catch {}
+   } else if (chunk2Failed) {
+        // silently skip — no browser fallback
       }
     }
 
