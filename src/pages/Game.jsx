@@ -7,7 +7,6 @@ import DiceRoll from '../components/DiceRoll'
 // ─── VOICE CONFIG ────────────────────────────────────────────────────────────
 const NARRATOR_VOICE = 'Charon'
 const NARRATOR_LABEL = 'Narrator'
-const NARRATOR_STYLE = 'Speak as a measured, authoritative fantasy story narrator. Deep and calm with deliberate pacing. Convey gravitas and wonder. Consistent tone throughout.'
 const TTS_MODEL = 'gemini-3.1-flash-tts-preview'
 
 // ─── RARITY CONFIG ───────────────────────────────────────────────────────────
@@ -38,7 +37,6 @@ const SLOT_LABELS = {
   accessory: '💍 Accessory',
 }
 
-// Guess slot from item type for DM-given items
 function guessSlot(type) {
   if (!type) return null
   const t = type.toLowerCase()
@@ -177,10 +175,9 @@ INVENTORY — only valid triggers:
 GOLD RULE — CRITICAL:
 - NEVER calculate gold totals. NEVER mention current gold amounts.
 - NEVER say "your new total is X gold".
-- When gold changes (purchase, reward, finding coins) use ONLY:
+- When gold changes use ONLY:
 <gold_change>{"amount": -5, "reason": "healing potion purchase"}</gold_change>
 - amount is ALWAYS a delta: negative for spending, positive for receiving.
-- The game engine handles all gold math. You only report what changed and why.
 
 Valid inventory event:
 <inventory_add>{"player":"Name","item":"item name","icon":"emoji","type":"weapon|armor|shield|accessory|consumable|misc","slot":"mainHand|offHand|armor|accessory|null","description":"brief description","reason":"loot|quest_reward|purchase|found"}</inventory_add>
@@ -258,7 +255,6 @@ function parseHpChange(text) {
   try { return JSON.parse(match[1].trim()) } catch { return null }
 }
 
-// Keep state_update as fallback for backwards compat
 function parseStateUpdate(text) {
   const match = text.match(/<state_update>([\s\S]*?)<\/state_update>/)
   if (!match) return null
@@ -327,10 +323,6 @@ function detectNpcInText(text, npcData) {
 }
 
 // ─── SPLIT INTO 2 CHUNKS ─────────────────────────────────────────────────────
-// Split response into exactly 2 chunks:
-// Chunk 1: everything before the first NPC line (or first half if no NPC)
-// Chunk 2: NPC dialogue + any narration after (or second half)
-// Chunk 1 starts playing immediately while chunk 2 generates in parallel.
 function splitIntoTwoChunks(text, npcData) {
   const lines = text
     .split(/\n+/)
@@ -343,33 +335,25 @@ function splitIntoTwoChunks(text, npcData) {
   const npcMatch = detectNpcInText(lines.join('\n'), npcData)
 
   if (npcMatch) {
-    // Find where NPC lines start
     const firstNpcIdx = lines.findIndex(l => new RegExp(`^${npcMatch.npcName}\\s*:`, 'i').test(l))
     if (firstNpcIdx > 0) {
-      // Chunk 1: narration before NPC
-      // Chunk 2: NPC dialogue + anything after
       return [
         lines.slice(0, firstNpcIdx).join('\n'),
         lines.slice(firstNpcIdx).join('\n'),
       ]
     }
-    // NPC is the first line — no split needed, single chunk
     return [lines.join('\n')]
   }
 
-  // No NPC — split at midpoint if long enough
   if (lines.length >= 4) {
     const mid = Math.ceil(lines.length / 2)
-    return [
-      lines.slice(0, mid).join('\n'),
-      lines.slice(mid).join('\n'),
-    ]
+    return [lines.slice(0, mid).join('\n'), lines.slice(mid).join('\n')]
   }
 
   return [lines.join('\n')]
 }
 
-// ─── MULTI-SPEAKER TTS PAYLOAD ────────────────────────────────────────────────
+// ─── TTS PAYLOAD ─────────────────────────────────────────────────────────────
 function buildTtsPayload(text, npcData) {
   const lines = text
     .split(/\n+/)
@@ -384,15 +368,20 @@ function buildTtsPayload(text, npcData) {
   const hasNpc = npcName !== null
   const hasNarration = hasNpc ? lines.some(l => !new RegExp(`^${npcName}\\s*:`, 'i').test(l)) : true
 
+  // Pure narration — single Charon voice
   if (!hasNpc) {
-    return { type: 'single', voice: NARRATOR_VOICE, text: lines.join('\n'), isNarrator: true }
+    return { type: 'single', voice: NARRATOR_VOICE, text: lines.join('\n') }
   }
 
+  // Pure NPC dialogue — single NPC voice
   if (hasNpc && !hasNarration) {
-    const npcLines = lines.map(l => l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim()).join(' ')
-    return { type: 'single', voice: npcVoice, text: npcLines, isNarrator: false }
+    const npcLines = lines
+      .map(l => l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim())
+      .join(' ')
+    return { type: 'single', voice: npcVoice, text: npcLines }
   }
 
+  // Mixed — multi-speaker
   const labeled = lines.map(l => {
     if (new RegExp(`^${npcName}\\s*:`, 'i').test(l)) {
       return `${npcName}: ${l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim()}`
@@ -403,7 +392,7 @@ function buildTtsPayload(text, npcData) {
   return { type: 'multi', npcName, npcVoice, text: labeled }
 }
 
-// ─── TTS API WITH FALLBACK CHAIN ──────────────────────────────────────────────
+// ─── TTS API — 3.1 ONLY, NO FALLBACK ─────────────────────────────────────────
 async function callTtsApi(body) {
   try {
     const response = await fetch(
@@ -413,7 +402,7 @@ async function callTtsApi(body) {
     const data = await response.json()
     if (data.error) { console.log('TTS error:', data.error.message); return null }
     const audioPart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
-    if (!audioPart) { console.log('TTS: no audio in response'); return null }
+    if (!audioPart) { console.log('TTS: no audio returned'); return null }
     return audioPart.inlineData.data
   } catch (e) {
     console.log('TTS failed:', e)
@@ -426,13 +415,24 @@ async function generateChunkTTS(chunkText, npcData) {
   if (!payload) return null
 
   let body
+
   if (payload.type === 'single') {
+    // Single voice — narrator (Charon) or NPC voice
+    // NO systemInstruction — gemini-3.1-flash-tts-preview does not support it
+    // and silently returns no audio when present
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
-      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: payload.voice } } } }
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: payload.voice }
+          }
+        }
+      }
     }
-    if (payload.isNarrator) body.systemInstruction = { parts: [{ text: NARRATOR_STYLE }] }
   } else {
+    // Multi-speaker — narrator + NPC
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
       generationConfig: {
@@ -448,9 +448,9 @@ async function generateChunkTTS(chunkText, npcData) {
       }
     }
   }
+
   return await callTtsApi(body)
 }
-
 
 function playBase64Audio(base64Pcm, audioRef) {
   const blob = pcmToWav(base64Pcm)
@@ -491,7 +491,7 @@ export default function Game() {
 
   const [showInventory, setShowInventory] = useState(false)
   const [inventoryTab, setInventoryTab] = useState('equipped')
-  const [selectedItem, setSelectedItem] = useState(null) // item detail popup
+  const [selectedItem, setSelectedItem] = useState(null)
   const [vaultRolling, setVaultRolling] = useState(false)
   const [vaultResult, setVaultResult] = useState(null)
   const [vaultRollsAvailable, setVaultRollsAvailable] = useState(1)
@@ -589,7 +589,7 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
-  // ─── HOST TTS — 2 CHUNKS, PLAY FIRST WHILE SECOND LOADS ──────────────────
+  // ─── HOST TTS — 2 CHUNKS ─────────────────────────────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
     const clean = cleanText(text)
@@ -601,7 +601,7 @@ export default function Game() {
     const chunks = splitIntoTwoChunks(clean, npcDataRef.current)
     if (chunks.length === 0) { setTtsStatus('idle'); return }
 
-    // Start generating chunk 2 immediately in background
+    // Fire chunk 2 generation immediately in background
     let chunk2Promise = null
     let chunk2Audio = null
     let chunk2Failed = false
@@ -609,7 +609,7 @@ export default function Game() {
     if (chunks.length > 1) {
       chunk2Promise = generateChunkTTS(chunks[1], npcDataRef.current)
         .then(b => { chunk2Audio = b })
-        .catch(e => { console.log('Chunk 2 TTS failed:', e); chunk2Failed = true })
+        .catch(e => { console.log('Chunk 2 failed:', e); chunk2Failed = true })
     }
 
     // Generate and play chunk 1
@@ -617,32 +617,35 @@ export default function Game() {
       const chunk1Audio = await generateChunkTTS(chunks[0], npcDataRef.current)
       if (mutedRef.current) { setTtsStatus('idle'); return }
 
-     if (!chunk1Audio) {
-        setTtsStatus('idle')
-      } else {
+      if (chunk1Audio) {
         audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm: chunk1Audio } })
         const audio = playBase64Audio(chunk1Audio, currentAudioRef)
         setTtsStatus('playing')
-        // While chunk 1 plays, chunk 2 is generating in background
-        await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
+        await new Promise((resolve) => {
+          audio.addEventListener('ended', resolve)
+          audio.addEventListener('error', resolve)
+          audio.play().catch(resolve)
+        })
+      } else {
+        console.log('Chunk 1 returned no audio — skipping silently')
       }
     } catch (e) {
-      console.log('Chunk 1 TTS failed:', e)
-      setTtsStatus('idle')
+      console.log('Chunk 1 error:', e)
     }
 
-    // Play chunk 2 once it's ready (should already be done by now)
+    // Wait for chunk 2 then play
     if (chunks.length > 1 && !mutedRef.current) {
-      // Wait for chunk 2 to finish generating if it hasn't yet
       if (chunk2Promise) await chunk2Promise
 
       if (chunk2Audio && !chunk2Failed) {
         audioChannelRef.current?.send({ type: 'broadcast', event: 'audio_chunk', payload: { base64Pcm: chunk2Audio } })
         const audio = playBase64Audio(chunk2Audio, currentAudioRef)
         setTtsStatus('playing')
-        await new Promise((resolve) => { audio.addEventListener('ended', resolve); audio.addEventListener('error', resolve); audio.play().catch(resolve) })
-   } else if (chunk2Failed) {
-        // silently skip — no browser fallback
+        await new Promise((resolve) => {
+          audio.addEventListener('ended', resolve)
+          audio.addEventListener('error', resolve)
+          audio.play().catch(resolve)
+        })
       }
     }
 
@@ -799,7 +802,6 @@ export default function Game() {
     const equipment = gameState.equipment || {}
     const abilities = player?.abilities || []
 
-    // Build inventory summary for DM — names only, keep it short
     const inventoryNames = (gameState.inventory || [])
       .map(i => typeof i === 'string' ? i : `${i.icon || ''} ${i.name}`)
       .join(', ')
@@ -830,7 +832,6 @@ export default function Game() {
   }
 
   async function processDmResponse(raw) {
-    // NPC data first so npcDataRef is populated before TTS
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
       const updated = { ...npcDataRef.current, [npc.name]: { ...npc } }
@@ -839,30 +840,25 @@ export default function Game() {
       if (isHost) hostGenerateAndBroadcastScene(raw, npc)
     }
 
-    // Gold change — request confirmation from player
     const goldChange = parseGoldChange(raw)
     if (goldChange && typeof goldChange.amount === 'number') {
       await requestGoldChange(goldChange.amount, goldChange.reason || '')
     }
 
-    // HP change
     const hpChange = parseHpChange(raw)
     if (hpChange && typeof hpChange.amount === 'number') {
       await applyHpChange(hpChange.amount)
     }
 
-    // Legacy state_update fallback (hp/gold together)
     const stateUpdate = parseStateUpdate(raw)
     if (stateUpdate) {
       if (stateUpdate.hp !== undefined) await applyHpChange(stateUpdate.hp - gameState.hp)
-      // Gold from state_update still goes through confirmation
       if (stateUpdate.gold !== undefined) {
         const delta = stateUpdate.gold - gameState.gold
         if (delta !== 0) await requestGoldChange(delta, 'transaction')
       }
     }
 
-    // Inventory adds — build proper item objects
     const adds = parseInventoryAdd(raw)
     for (const add of adds) {
       if (add.player === player?.name) {
@@ -882,13 +878,11 @@ export default function Game() {
       }
     }
 
-    // Inventory removes
     const removes = parseInventoryRemove(raw)
     for (const remove of removes) {
       if (remove.player === player?.name) await removeInventoryItem(remove.item)
     }
 
-    // Grant vault roll
     const grantRoll = parseGrantRoll(raw)
     if (grantRoll?.player === player?.name) setVaultRollsAvailable(v => v + 1)
 
@@ -990,7 +984,6 @@ export default function Game() {
   const hpColor = hpPct > 50 ? '#27ae60' : hpPct > 25 ? '#f39c12' : '#c0392b'
   const scenePct = isMobile ? 32 : 38
 
-  // ─── INVENTORY HELPERS ────────────────────────────────────────────────────
   const equippedItems = gameState.equipment || {}
   const backpackItems = (gameState.inventory || []).filter(i => typeof i === 'object' && !i.equipped && i.slot)
   const consumableItems = (gameState.inventory || []).filter(i => typeof i === 'object' && (i.type === 'consumable' || !i.slot))
@@ -1024,12 +1017,8 @@ export default function Game() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={declineGoldChange} style={{ flex: 1, padding: '10px', background: 'transparent', border: '1px solid #c0392b', borderRadius: '6px', color: '#c0392b', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>
-                DECLINE ✗
-              </button>
-              <button onClick={confirmGoldChange} style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg, #0a1f0a, #102010)', border: '1px solid #27ae60', borderRadius: '6px', color: '#27ae60', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>
-                ACCEPT ✓
-              </button>
+              <button onClick={declineGoldChange} style={{ flex: 1, padding: '10px', background: 'transparent', border: '1px solid #c0392b', borderRadius: '6px', color: '#c0392b', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>DECLINE ✗</button>
+              <button onClick={confirmGoldChange} style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg, #0a1f0a, #102010)', border: '1px solid #27ae60', borderRadius: '6px', color: '#27ae60', fontFamily: "'Cinzel', serif", fontSize: '10px', letterSpacing: '2px', cursor: 'pointer' }}>ACCEPT ✓</button>
             </div>
           </div>
         </div>
@@ -1185,7 +1174,6 @@ export default function Game() {
       {showInventory && (
         <div onClick={() => { setShowInventory(false); setSelectedItem(null) }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', zIndex: 200 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: isMobile ? '100%' : '420px', maxHeight: isMobile ? '88vh' : '82vh', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: isMobile ? '20px 20px 0 0' : '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
             <div style={{ padding: '14px 20px 0' }}>
               <div style={{ width: '36px', height: '3px', background: 'var(--border)', borderRadius: '2px', margin: '0 auto 12px' }} />
               <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '14px', color: 'var(--gold)', marginBottom: '10px' }}>⚔ Character</div>
@@ -1198,7 +1186,6 @@ export default function Game() {
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px' }}>
 
-              {/* ── EQUIPPED TAB ── */}
               {inventoryTab === 'equipped' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {Object.entries(SLOT_LABELS).map(([slot, label]) => {
@@ -1208,27 +1195,21 @@ export default function Game() {
                       <div key={slot} style={{ background: 'var(--bg2)', border: `1px solid ${rarColor}44`, borderLeft: `3px solid ${rarColor}`, borderRadius: '8px', padding: '10px 12px' }}>
                         <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '1px', marginBottom: '4px' }}>{label}</div>
                         {item ? (
-                          <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ fontSize: '18px' }}>{item.icon}</span>
-                                <div>
-                                  <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: rarColor }}>{item.name}</div>
-                                  {item.description && <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '1px' }}>{item.description}</div>}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: '18px' }}>{item.icon}</span>
+                              <div>
+                                <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: rarColor }}>{item.name}</div>
+                                {item.description && <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '1px' }}>{item.description}</div>}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {Object.keys(item.stats || {}).length > 0 && (
+                                <div style={{ textAlign: 'right' }}>
+                                  {Object.entries(item.stats).map(([k, v]) => <div key={k} style={{ fontSize: '9px', color: '#27ae60' }}>+{v} {k.toUpperCase()}</div>)}
                                 </div>
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                {Object.keys(item.stats || {}).length > 0 && (
-                                  <div style={{ textAlign: 'right' }}>
-                                    {Object.entries(item.stats).map(([k, v]) => (
-                                      <div key={k} style={{ fontSize: '9px', color: '#27ae60' }}>+{v} {k.toUpperCase()}</div>
-                                    ))}
-                                  </div>
-                                )}
-                                <button onClick={() => unequipItem(slot)} style={{ padding: '4px 8px', background: 'transparent', border: '1px solid #c0392b44', borderRadius: '4px', color: '#c0392b', fontFamily: "'Cinzel', serif", fontSize: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  UNEQUIP
-                                </button>
-                              </div>
+                              )}
+                              <button onClick={() => unequipItem(slot)} style={{ padding: '4px 8px', background: 'transparent', border: '1px solid #c0392b44', borderRadius: '4px', color: '#c0392b', fontFamily: "'Cinzel', serif", fontSize: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>UNEQUIP</button>
                             </div>
                           </div>
                         ) : (
@@ -1237,8 +1218,6 @@ export default function Game() {
                       </div>
                     )
                   })}
-
-                  {/* Attributes */}
                   <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', marginTop: '4px' }}>
                     <div style={{ fontFamily: "'Cinzel', serif", fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '2px', marginBottom: '8px' }}>ATTRIBUTES</div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
@@ -1251,19 +1230,15 @@ export default function Game() {
                       ))}
                     </div>
                   </div>
-
                   <div style={{ fontFamily: "'Cinzel', serif", fontSize: '11px', color: 'var(--gold)', textAlign: 'center', padding: '6px 0' }}>🪙 {gameState.gold} Gold</div>
                 </div>
               )}
 
-              {/* ── BACKPACK TAB ── */}
               {inventoryTab === 'backpack' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {backpackItems.length === 0 && consumableItems.length === 0 && legacyItems.length === 0 ? (
+                  {backpackItems.length === 0 && consumableItems.length === 0 && legacyItems.length === 0 &&
                     <div style={{ fontSize: '12px', color: 'var(--text-dim)', padding: '20px 0', textAlign: 'center', fontStyle: 'italic' }}>Your pack is empty</div>
-                  ) : null}
-
-                  {/* Equippable items */}
+                  }
                   {backpackItems.map(item => {
                     const rarColor = RARITIES[item.rarity]?.color || '#9e9e9e'
                     return (
@@ -1280,23 +1255,17 @@ export default function Game() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                             {Object.keys(item.stats || {}).length > 0 && (
                               <div style={{ textAlign: 'right' }}>
-                                {Object.entries(item.stats).map(([k, v]) => (
-                                  <div key={k} style={{ fontSize: '9px', color: '#27ae60' }}>+{v} {k.toUpperCase()}</div>
-                                ))}
+                                {Object.entries(item.stats).map(([k, v]) => <div key={k} style={{ fontSize: '9px', color: '#27ae60' }}>+{v} {k.toUpperCase()}</div>)}
                               </div>
                             )}
                             {item.slot && (
-                              <button onClick={() => equipItem(item.id)} style={{ padding: '4px 8px', background: 'linear-gradient(135deg, #0a1f0a, #102010)', border: `1px solid ${rarColor}66`, borderRadius: '4px', color: rarColor, fontFamily: "'Cinzel', serif", fontSize: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                EQUIP
-                              </button>
+                              <button onClick={() => equipItem(item.id)} style={{ padding: '4px 8px', background: 'linear-gradient(135deg, #0a1f0a, #102010)', border: `1px solid ${rarColor}66`, borderRadius: '4px', color: rarColor, fontFamily: "'Cinzel', serif", fontSize: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>EQUIP</button>
                             )}
                           </div>
                         </div>
                       </div>
                     )
                   })}
-
-                  {/* Consumables */}
                   {consumableItems.map(item => {
                     const isObj = typeof item === 'object'
                     return (
@@ -1309,15 +1278,12 @@ export default function Game() {
                       </div>
                     )
                   })}
-
-                  {/* Legacy string items */}
                   {legacyItems.map((item, i) => (
                     <div key={i} style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: 'var(--text-dim)', fontStyle: 'italic' }}>{item}</div>
                   ))}
                 </div>
               )}
 
-              {/* ── ABILITIES TAB ── */}
               {inventoryTab === 'abilities' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {(player?.abilities || []).length === 0
@@ -1339,7 +1305,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* ── TRADE TAB ── */}
               {inventoryTab === 'trade' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', letterSpacing: '2px', marginBottom: '4px' }}>GIVE ITEMS OR GOLD</div>
@@ -1365,7 +1330,6 @@ export default function Game() {
                 </div>
               )}
 
-              {/* ── VAULT TAB ── */}
               {inventoryTab === 'vault' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1397,15 +1361,11 @@ export default function Game() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span style={{ fontSize: '22px' }}>{vaultResult.icon || '✨'}</span>
-                          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '12px', color:RARITIES[vaultResult.rarity]?.color }}>{vaultResult.name}</div>
+                          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: '12px', color: RARITIES[vaultResult.rarity]?.color }}>{vaultResult.name}</div>
                         </div>
                         <div style={{ fontSize: '8px', color: RARITIES[vaultResult.rarity]?.color, letterSpacing: '1px' }}>{RARITIES[vaultResult.rarity]?.label?.toUpperCase()}</div>
                       </div>
-                      {vaultResult.slot && (
-                        <div style={{ fontSize: '8px', color: 'var(--text-dim)', marginBottom: '4px', fontFamily: "'Cinzel', serif", letterSpacing: '1px' }}>
-                          {SLOT_LABELS[vaultResult.slot] || vaultResult.slot}
-                        </div>
-                      )}
+                      {vaultResult.slot && <div style={{ fontSize: '8px', color: 'var(--text-dim)', marginBottom: '4px', fontFamily: "'Cinzel', serif", letterSpacing: '1px' }}>{SLOT_LABELS[vaultResult.slot] || vaultResult.slot}</div>}
                       <div style={{ fontSize: '12px', color: 'var(--text)', marginBottom: '4px' }}>{vaultResult.description}</div>
                       <div style={{ fontSize: '11px', color: '#27ae60', marginBottom: '4px' }}>✦ {vaultResult.effect}</div>
                       <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontStyle: 'italic', marginBottom: '10px' }}>{vaultResult.flavor_text}</div>
