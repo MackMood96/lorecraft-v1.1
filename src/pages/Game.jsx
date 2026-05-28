@@ -29,7 +29,6 @@ function rollRarity() {
   return 'common'
 }
 
-// ─── ITEM SLOT MAPPING ────────────────────────────────────────────────────────
 const SLOT_LABELS = {
   mainHand: '🗡️ Main Hand',
   offHand: '🛡️ Off Hand',
@@ -47,7 +46,6 @@ function guessSlot(type) {
   return null
 }
 
-// ─── GROQ CALL ───────────────────────────────────────────────────────────────
 async function callGroq(system, user, maxTokens = 300) {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -103,7 +101,6 @@ For cursed items: dark humor, negative twist. For legendary: mythic, awe-inspiri
   catch { return { name: 'Mystery Shard', description: 'Its purpose is unclear.', effect: 'Unknown', flavor_text: 'Some things defy explanation.', rarity, type, slot: null, icon: '💎' } }
 }
 
-// ─── GEMINI IMAGE ─────────────────────────────────────────────────────────────
 async function generateGeminiImage(prompt) {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
@@ -130,7 +127,6 @@ function base64ToBlob(base64, mimeType) {
   return new Blob([arr], { type: mimeType })
 }
 
-// ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are an expert Dungeon Master for a text-based fantasy RPG. Create immersive, dynamic adventures.
 
 RESPONSE LENGTH — CRITICAL:
@@ -201,7 +197,6 @@ DIALOGUE FORMAT:
 KNOWN NPCS:
 {{NPC_ROSTER}}`
 
-// ─── MUSIC ──────────────────────────────────────────────────────────────────
 const MUSIC_TRACKS = {
   exploration: '/music/exploration.mp3', combat: '/music/combat.mp3',
   mystery: '/music/mystery.mp3', tavern: '/music/tavern.mp3',
@@ -217,7 +212,6 @@ function detectMood(text) {
   return 'exploration'
 }
 
-// ─── PCM → WAV ──────────────────────────────────────────────────────────────
 function pcmToWav(base64Pcm) {
   const raw = atob(base64Pcm)
   const pcm = new Uint8Array(raw.length)
@@ -236,7 +230,6 @@ function pcmToWav(base64Pcm) {
   return new Blob([wav], { type: 'audio/wav' })
 }
 
-// ─── PARSE HELPERS ───────────────────────────────────────────────────────────
 function parseNpcData(text) {
   const match = text.match(/<npc_data>([\s\S]*?)<\/npc_data>/)
   if (!match) return null
@@ -307,7 +300,6 @@ function buildNpcRoster(npcData) {
   return npcs.map(n => `- ${n.name} (${n.race || 'Unknown'}, ${n.role || 'Unknown'}, voice: ${n.voice}): ${n.description || 'No description.'}`).join('\n')
 }
 
-// ─── NPC DETECTION ────────────────────────────────────────────────────────────
 function detectNpcInText(text, npcData) {
   if (!npcData || Object.keys(npcData).length === 0) return null
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean)
@@ -322,7 +314,6 @@ function detectNpcInText(text, npcData) {
   return null
 }
 
-// ─── SPLIT INTO 2 CHUNKS ─────────────────────────────────────────────────────
 function splitIntoTwoChunks(text, npcData) {
   const lines = text
     .split(/\n+/)
@@ -353,7 +344,6 @@ function splitIntoTwoChunks(text, npcData) {
   return [lines.join('\n')]
 }
 
-// ─── TTS PAYLOAD ─────────────────────────────────────────────────────────────
 function buildTtsPayload(text, npcData) {
   const lines = text
     .split(/\n+/)
@@ -368,12 +358,10 @@ function buildTtsPayload(text, npcData) {
   const hasNpc = npcName !== null
   const hasNarration = hasNpc ? lines.some(l => !new RegExp(`^${npcName}\\s*:`, 'i').test(l)) : true
 
-  // Pure narration — single Charon voice
   if (!hasNpc) {
     return { type: 'single', voice: NARRATOR_VOICE, text: lines.join('\n') }
   }
 
-  // Pure NPC dialogue — single NPC voice
   if (hasNpc && !hasNarration) {
     const npcLines = lines
       .map(l => l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim())
@@ -381,7 +369,6 @@ function buildTtsPayload(text, npcData) {
     return { type: 'single', voice: npcVoice, text: npcLines }
   }
 
-  // Mixed — multi-speaker
   const labeled = lines.map(l => {
     if (new RegExp(`^${npcName}\\s*:`, 'i').test(l)) {
       return `${npcName}: ${l.replace(new RegExp(`^${npcName}\\s*:\\s*"?`, 'i'), '').replace(/"$/, '').trim()}`
@@ -392,7 +379,6 @@ function buildTtsPayload(text, npcData) {
   return { type: 'multi', npcName, npcVoice, text: labeled }
 }
 
-// ─── TTS API — 3.1 ONLY, NO FALLBACK ─────────────────────────────────────────
 async function callTtsApi(body) {
   try {
     const response = await fetch(
@@ -417,9 +403,6 @@ async function generateChunkTTS(chunkText, npcData) {
   let body
 
   if (payload.type === 'single') {
-    // Single voice — narrator (Charon) or NPC voice
-    // NO systemInstruction — gemini-3.1-flash-tts-preview does not support it
-    // and silently returns no audio when present
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
       generationConfig: {
@@ -432,7 +415,6 @@ async function generateChunkTTS(chunkText, npcData) {
       }
     }
   } else {
-    // Multi-speaker — narrator + NPC
     body = {
       contents: [{ parts: [{ text: payload.text }] }],
       generationConfig: {
@@ -460,7 +442,6 @@ function playBase64Audio(base64Pcm, audioRef) {
   return audio
 }
 
-// ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function Game() {
   const { campaignId } = useParams()
   const [searchParams] = useSearchParams()
@@ -538,7 +519,6 @@ export default function Game() {
     prevMessageCount.current = messages.length
   }, [messages])
 
-  // ─── SCENE ────────────────────────────────────────────────────────────────
   const hostGenerateAndBroadcastScene = useCallback(async (dmText, activeNpc = null) => {
     try {
       lastDmTextRef.current = dmText
@@ -553,7 +533,6 @@ export default function Game() {
 
   const regenerateScene = () => { if (lastDmTextRef.current) hostGenerateAndBroadcastScene(lastDmTextRef.current) }
 
-  // ─── CHANNELS ─────────────────────────────────────────────────────────────
   function subscribeToSceneAndAudio() {
     const sceneChannel = supabase.channel(`scene:${campaignId}`, { config: { broadcast: { self: false } } })
     if (!isHost) {
@@ -589,7 +568,6 @@ export default function Game() {
     return () => { supabase.removeChannel(sceneChannel); supabase.removeChannel(audioChannel) }
   }
 
-  // ─── HOST TTS — 2 CHUNKS ─────────────────────────────────────────────────
   async function hostGenerateAndBroadcastAudio(text) {
     if (mutedRef.current) return
     const clean = cleanText(text)
@@ -601,7 +579,6 @@ export default function Game() {
     const chunks = splitIntoTwoChunks(clean, npcDataRef.current)
     if (chunks.length === 0) { setTtsStatus('idle'); return }
 
-    // Fire chunk 2 generation immediately in background
     let chunk2Promise = null
     let chunk2Audio = null
     let chunk2Failed = false
@@ -612,7 +589,6 @@ export default function Game() {
         .catch(e => { console.log('Chunk 2 failed:', e); chunk2Failed = true })
     }
 
-    // Generate and play chunk 1
     try {
       const chunk1Audio = await generateChunkTTS(chunks[0], npcDataRef.current)
       if (mutedRef.current) { setTtsStatus('idle'); return }
@@ -633,7 +609,6 @@ export default function Game() {
       console.log('Chunk 1 error:', e)
     }
 
-    // Wait for chunk 2 then play
     if (chunks.length > 1 && !mutedRef.current) {
       if (chunk2Promise) await chunk2Promise
 
@@ -662,7 +637,6 @@ export default function Game() {
     musicRef.current = audio; currentMoodRef.current = mood
   }
 
-  // ─── INIT ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!campaignId) return
     loadMessages()
@@ -821,23 +795,24 @@ export default function Game() {
       `\nAbilities: ${abilities.map(a => a.name).join(', ') || 'None'}.` +
       (hasMention ? '\n\nCRITICAL: This message contains an @mention. ONE sentence only. Stop immediately after.' : '')
 
-    // Retry once on 429
-   let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
-  body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
-})
-if (response.status === 429) {
-  await new Promise(r => setTimeout(r, 8000))
-  response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
-    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
-  })
-}
-const data = await response.json()
-if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
-return data.choices[0].message.content
+    let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
+    })
+    if (response.status === 429) {
+      await new Promise(r => setTimeout(r, 8000))
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
+      })
+    }
+    const data = await response.json()
+    if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
+    return data.choices[0].message.content
+  }
+
   async function processDmResponse(raw) {
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
@@ -1001,7 +976,6 @@ return data.choices[0].message.content
 
       {currentRoll && <DiceRoll roll={currentRoll} onDismiss={() => setCurrentRoll(null)} />}
 
-      {/* ── GOLD CONFIRMATION MODAL ── */}
       {pendingGoldChange && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
           <div style={{ background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: `2px solid ${pendingGoldChange.amount < 0 ? '#c0392b' : '#27ae60'}`, borderRadius: '12px', padding: '24px', width: '280px', textAlign: 'center' }}>
@@ -1031,14 +1005,12 @@ return data.choices[0].message.content
         </div>
       )}
 
-      {/* ── GOLD TOAST ── */}
       {goldToast && (
         <div style={{ position: 'fixed', top: '70px', right: '12px', background: goldToast.amount > 0 ? 'rgba(39,174,96,0.9)' : 'rgba(192,57,43,0.9)', border: `1px solid ${goldToast.amount > 0 ? '#27ae60' : '#c0392b'}`, borderRadius: '8px', padding: '8px 14px', zIndex: 250, fontFamily: "'Cinzel', serif", fontSize: '12px', color: 'white', letterSpacing: '1px', animation: 'fadeIn 0.3s ease' }}>
           {goldToast.amount > 0 ? '+' : ''}{goldToast.amount} 🪙 {goldToast.reason}
         </div>
       )}
 
-      {/* ── HEADER ── */}
       <div style={{ padding: '7px 12px', background: 'rgba(10,8,18,0.98)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: isMobile ? '12px' : '14px', color: 'var(--gold)', letterSpacing: '2px' }}>⚔ LORECRAFT</div>
         <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
@@ -1053,7 +1025,6 @@ return data.choices[0].message.content
         </div>
       </div>
 
-      {/* ── ROOM CODE BANNER ── */}
       {showRoomCode && roomCode && (
         <div style={{ background: 'linear-gradient(135deg, #1e1830, #2a2045)', borderBottom: '1px solid var(--border)', padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div>
@@ -1067,7 +1038,6 @@ return data.choices[0].message.content
         </div>
       )}
 
-      {/* ── SCENE PANEL ── */}
       {sceneVisible && (
         <div style={{ height: `${scenePct}%`, flexShrink: 0, position: 'relative', borderBottom: '1px solid var(--border)', background: '#050304', overflow: 'hidden' }}>
           {sceneLoading && (
@@ -1091,7 +1061,6 @@ return data.choices[0].message.content
         </div>
       )}
 
-      {/* ── STATS BAR ── */}
       <div style={{ padding: '4px 12px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontFamily: "'Cinzel', serif", fontSize: '9px', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{player?.name} · {player?.class}</span>
         <div style={{ flex: 1, height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
@@ -1107,7 +1076,6 @@ return data.choices[0].message.content
         </div>
       )}
 
-      {/* ── MESSAGES ── */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '10px', minHeight: 0 }}>
         {messages.map((msg, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: msg.role === 'player' ? 'flex-end' : 'flex-start' }}>
@@ -1145,7 +1113,6 @@ return data.choices[0].message.content
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── QUICK ACTIONS ── */}
       <div style={{ display: 'flex', gap: '4px', padding: '3px 10px', overflowX: 'auto', flexShrink: 0, background: 'var(--bg)' }}>
         {['👁 Look', '⚔️ Attack', '🌑 Sneak', '🔍 Search', '💬 Talk', '💨 Flee'].map(action => (
           <button key={action} onClick={() => quickAction(action.split(' ').slice(1).join(' '))}
@@ -1155,7 +1122,6 @@ return data.choices[0].message.content
         ))}
       </div>
 
-      {/* ── @ MENTION DROPDOWN ── */}
       {mentionSearch !== null && filteredPlayers.length > 0 && (
         <div style={{ position: 'absolute', bottom: '65px', left: '10px', background: 'var(--bg3)', border: '1px solid var(--gold)', borderRadius: '8px', overflow: 'hidden', zIndex: 50, boxShadow: '0 0 20px rgba(201,168,76,0.2)' }}>
           {filteredPlayers.map(p => (
@@ -1164,7 +1130,6 @@ return data.choices[0].message.content
         </div>
       )}
 
-      {/* ── INPUT ── */}
       <div style={{ padding: '5px 10px 8px', background: 'rgba(10,8,18,0.98)', borderTop: '1px solid var(--border)', display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
         <textarea ref={inputRef} value={input}
           onChange={e => handleInput(e.target.value)}
@@ -1177,7 +1142,6 @@ return data.choices[0].message.content
           style={{ width: '34px', height: '34px', background: dmBusy ? 'var(--bg2)' : 'linear-gradient(135deg, #2a1f0a, #3d2e10)', border: `1px solid ${dmBusy ? 'var(--border)' : 'var(--gold)'}`, borderRadius: '50%', color: dmBusy ? 'var(--text-dim)' : 'var(--gold)', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: dmBusy ? 'none' : '0 0 12px rgba(201,168,76,0.15)', cursor: dmBusy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>➤</button>
       </div>
 
-      {/* ── INVENTORY MODAL ── */}
       {showInventory && (
         <div onClick={() => { setShowInventory(false); setSelectedItem(null) }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', zIndex: 200 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: isMobile ? '100%' : '420px', maxHeight: isMobile ? '88vh' : '82vh', background: 'linear-gradient(180deg, #1a1530, #110e1c)', border: '1px solid var(--border)', borderRadius: isMobile ? '20px 20px 0 0' : '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1397,5 +1361,4 @@ return data.choices[0].message.content
       `}</style>
     </div>
   )
-}
 }
