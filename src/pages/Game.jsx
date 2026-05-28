@@ -106,7 +106,7 @@ For cursed items: dark humor, negative twist. For legendary: mythic, awe-inspiri
 // ─── GEMINI IMAGE ─────────────────────────────────────────────────────────────
 async function generateGeminiImage(prompt) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${import.meta.env.VITE_GEMINI_TTS_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -821,16 +821,23 @@ export default function Game() {
       `\nAbilities: ${abilities.map(a => a.name).join(', ') || 'None'}.` +
       (hasMention ? '\n\nCRITICAL: This message contains an @mention. ONE sentence only. Stop immediately after.' : '')
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
-    })
-    const data = await response.json()
-    if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
-    return data.choices[0].message.content
-  }
-
+    // Retry once on 429
+   let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
+  body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
+})
+if (response.status === 429) {
+  await new Promise(r => setTimeout(r, 8000))
+  response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_KEY}` },
+    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: systemContent }, ...history], max_tokens: 600 })
+  })
+}
+const data = await response.json()
+if (!data.choices?.[0]?.message?.content) throw new Error('No response from DM')
+return data.choices[0].message.content
   async function processDmResponse(raw) {
     const npc = parseNpcData(raw)
     if (npc && npc.name && npc.voice) {
@@ -1390,4 +1397,5 @@ export default function Game() {
       `}</style>
     </div>
   )
+}
 }
